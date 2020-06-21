@@ -3,6 +3,7 @@
 
 #include <openenclave/attestation/verifier.h>
 #include <openenclave/bits/defs.h>
+#include <openenclave/bits/evidence.h>
 #include <openenclave/internal/calls.h>
 #include <openenclave/internal/cert.h>
 #include <openenclave/internal/raise.h>
@@ -16,6 +17,7 @@
 #define KEY_BUFF_SIZE 2048
 
 static const char* oid_oe_report = X509_OID_FOR_QUOTE_STRING;
+static const char* oid_oe_evidence = X509_OID_FOR_OE_EVIDENCE_STRING;
 
 // verify report user data against peer certificate
 static oe_result_t verify_report_user_data(
@@ -57,20 +59,23 @@ done:
     return result;
 }
 
-// verify there is a matched claim for the public key */
+// Verify there is a matched claim for the public key */
 static oe_result_t verify_public_key_claim(
     oe_claim_t* claims,
     size_t claims_length,
-    uint8_t* pub_key_buf,
-    size_t pub_key_buf_size)
+    uint8_t* public_key_buffer,
+    size_t public_key_buffer_size)
 {
     oe_result_t result = OE_FAILURE;
     for (int i = (int)claims_length - 1; i >= 0; i--)
     {
-        if (oe_strcmp(claims[i].name, "public_key") == 0)
+        if (oe_strcmp(claims[i].name, OE_CLAIM_CUSTOM_CLAIMS) == 0)
         {
-            if (claims[i].value_size == pub_key_buf_size &&
-                memcmp(claims[i].value, pub_key_buf, pub_key_buf_size) == 0)
+            if (claims[i].value_size == public_key_buffer_size &&
+                memcmp(
+                    claims[i].value,
+                    public_key_buffer,
+                    public_key_buffer_size) == 0)
             {
                 OE_TRACE_VERBOSE("Found matched public key in claims");
                 result = OE_OK;
@@ -199,10 +204,10 @@ done:
 }
 
 /**
- * oe_verify_plugin_attestation_certificate
+ * oe_verify_attestation_certificate_with_evidence
  *
- * This function perform a custom validation on the input certificate. This
- * validation includes extracting an attestation evidence extension from the
+ * This function performs a custom validation on the input certificate. This
+ * validation includes extracting attestation evidence extension from the
  * certificate before validating this evidence. An optional
  * claim_verify_callback could be passed in for a calling client to further
  * validate the claims of the enclave creating the certificate.
@@ -218,10 +223,10 @@ done:
  * @retval OE_FAILURE general failure
  * @retval other appropriate error code
  */
-oe_result_t oe_verify_plugin_attestation_certificate(
+oe_result_t oe_verify_attestation_certificate_with_evidence(
     uint8_t* cert_in_der,
     size_t cert_in_der_len,
-    oe_claim_verify_callback_t claim_verify_callback,
+    oe_verify_claims_callback_t claim_verify_callback,
     void* arg)
 {
     oe_result_t result = OE_FAILURE;
@@ -254,7 +259,7 @@ oe_result_t oe_verify_plugin_attestation_certificate(
 
     // determine the size of the extension
     if (oe_cert_find_extension(
-            &cert, (const char*)oid_oe_report, NULL, &report_size) !=
+            &cert, (const char*)oid_oe_evidence, NULL, &report_size) !=
         OE_BUFFER_TOO_SMALL)
         OE_RAISE(OE_FAILURE);
 
@@ -264,7 +269,7 @@ oe_result_t oe_verify_plugin_attestation_certificate(
 
     // find the extension
     OE_CHECK(oe_cert_find_extension(
-        &cert, (const char*)oid_oe_report, report, &report_size));
+        &cert, (const char*)oid_oe_evidence, report, &report_size));
     OE_TRACE_VERBOSE("extract_x509_report_extension() succeeded");
 
     // find the report version
@@ -273,14 +278,17 @@ oe_result_t oe_verify_plugin_attestation_certificate(
         OE_RAISE_MSG(OE_INVALID_PARAMETER, "Invalid report version");
 
     result = oe_verify_evidence(
-          report,
-          report_size,
-          NULL,
-          0,
-          NULL,
-          0,
-          &claims,
-          &claims_length);
+        NULL, /* rely on the format UUID in the header. For attestation
+                 certificate, the report should always include the header.
+               */
+        report,
+        report_size,
+        NULL,
+        0,
+        NULL,
+        0,
+        &claims,
+        &claims_length);
     OE_CHECK(result);
     OE_TRACE_VERBOSE("quote validation succeeded");
 
@@ -293,8 +301,8 @@ oe_result_t oe_verify_plugin_attestation_certificate(
     OE_TRACE_VERBOSE(
         "oe_cert_write_public_key_pem pub_key_buf_size=%d", pub_key_buf_size);
 
-    result = verify_public_key_claim(claims, claims_length, pub_key_buf,
-        pub_key_buf_size);
+    result = verify_public_key_claim(
+        claims, claims_length, pub_key_buf, pub_key_buf_size);
     OE_CHECK(result);
     OE_TRACE_VERBOSE("user data: hash(public key) validation passed", NULL);
 
@@ -311,12 +319,17 @@ oe_result_t oe_verify_plugin_attestation_certificate(
     {
         OE_TRACE_WARNING(
             "No claim_verify_callback provided in "
-            "oe_verify_plugin_attestation_certificate call",
+            "oe_verify_attestation_certificate_with_evidence call",
             NULL);
     }
 
 done:
     oe_free(pub_key_buf);
+    for (size_t i = 0; i < claims_length; i++)
+    {
+        oe_free(claims[i].name);
+        oe_free(claims[i].value);
+    }
     oe_free(claims);
     oe_cert_free(&cert);
     oe_free(report);
