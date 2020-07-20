@@ -278,9 +278,9 @@ oe_result_t oe_verify_attestation_certificate_with_evidence(
         OE_RAISE_MSG(OE_INVALID_PARAMETER, "Invalid report version");
 
     result = oe_verify_evidence(
-        NULL, /* rely on the format UUID in the header. For attestation
-                 certificate, the report should always include the header.
-               */
+        // rely on the format UUID in the header. For attestation
+        // certificate, the report should always include the header.
+        NULL,
         report,
         report_size,
         NULL,
