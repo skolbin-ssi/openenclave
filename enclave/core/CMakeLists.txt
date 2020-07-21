@@ -78,6 +78,7 @@ if (OE_SGX)
     ../../common/sgx/endorsements.c
     ../../common/sgx/rand.S
     sgx/arena.c
+    sgx/asmdefs.c
     sgx/backtrace.c
     sgx/calls.c
     sgx/cpuid.c
@@ -318,10 +319,6 @@ enclave_compile_definitions(
   # targets, but should not yet be exposed to consumers of our
   # package.
   $<BUILD_INTERFACE:OE_API_VERSION=2>)
-
-if (HAS_QUOTE_PROVIDER)
-  enclave_compile_definitions(oecore PUBLIC OE_LINK_SGX_DCAP_QL)
-endif ()
 
 if (USE_DEBUG_MALLOC)
   enclave_compile_definitions(oecore PRIVATE OE_USE_DEBUG_MALLOC)

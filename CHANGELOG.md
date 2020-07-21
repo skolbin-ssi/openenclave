@@ -26,16 +26,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The default memory allocator (dlmalloc) can be replaced by providing replacement functions. This ability to plug-in
   a custom allocator is most applicable for multi-threaded enclaves with memory allocation patterns where the default
   memory allocator may not be performant. See [Pluggable Allocators](docs/DesignDocs/Pluggableallocators.md).
+- `snmalloc` is available as a pluggable allocator library `oesnmalloc`. An enclave can use snmalloc instead of
+  dlmalloc by specifying `liboesnmalloc.a` before `liboelibc.a` and `liboecore.a` in the linker line.
+- Added pluggable_allocator sample.
 - Gcov is used to obtain code coverage information for the SDK. See [Code Coverage](docs/GettingStartedDocs/Contributors/CodeCoverage.md).
 - Added include\openenclave\attestation\attester.h to support attestation plug-in model attester scenarios.
 - Added include\openenclave\attestation\verifier.h to support attestation plug-in model verifier scenarios.
 
 ### Changed
 - `COMPILE_SYSTEM_EDL` is now OFF by default, meaning system EDL must be imported by
-  application EDL. See [system EDL opt-in document]
-  (docs/DesignDocs/system_ocall_opt_in.md#how-to-port-your-application) for more information.
+  application EDL. See [system EDL opt-in document](docs/DesignDocs/system_ocall_opt_in.md#how-to-port-your-application) for more information.
   - Note: SDK users would need to import logging.edl to enable logging. Logging is disabled by default.
   - See [System edls](docs/SystemEdls.md) for list of all edls and associated OCalls.
+  - A known issue is that different enclaves importing functions from System EDLs cannot be loaded by the same host app unless all of the functions were imported with exactly the same ordinals. See #3250 for details. This will be addressed in the next release based on design proposal #3086. 
+  - A workaround for this issue in the meantime is to define a standard import EDL for any enclaves that need to be loaded into the same host app. Ensuring this shared EDL is then the first import in each enclave's EDL will result in the common imports being assigned the same ordinals in each resulting enclave.
 - Mark APIs in include/openenclave/attestation/sgx/attester.h and verifier.h as experimental.
 - Remove CRL_ISSUER_CHAIN_PCK_PROC_CA field from endorsement struct define in include/openenclave/bits/attestation.h.
 - Switch to oeedger8r written in C++.
@@ -59,6 +63,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 - Removed oehostapp and the appendent "-rdynamic" compiling option. Please use oehost instead and add the option back manually if necessary.
 - Removed dependencies on nodejs and esy, which were previously used to build Ocaml compiler and oeedger8r.
+
+### Security
+- Fix [ABI poisoning vulnerability for x87 FPU operations in enclaves](
+https://github.com/openenclave/openenclave/security/advisories/GHSA-7wjx-wcwg-w999).
 
 [0.9.0][v0.9.0_log]
 ------------
