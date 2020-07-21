@@ -188,8 +188,6 @@ oe_result_t oe_get_sgx_quote_verification_collateral(
     memcpy(in.fmspc, args->fmspc, sizeof(in.fmspc));
     /* collateral_provider */
     in.collateral_provider = args->collateral_provider;
-    // memcpy(in.collateral_provider, args->collateral_provider,
-    // sizeof(in.collateral_provider));
     oe_prealloc_quote_verification_collateral_args(&in, &default_arg_size);
 
     for (;;)

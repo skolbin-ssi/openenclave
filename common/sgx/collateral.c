@@ -43,6 +43,8 @@ done:
     return result;
 }
 
+// determine CA provider type by platform_instance_id from SGX PCK certificate
+// which is 16 bytes long
 static oe_result_t _get_crl_ca_type(
     uint8_t* platform_instance_id,
     oe_get_sgx_quote_verification_collateral_args_t* args)

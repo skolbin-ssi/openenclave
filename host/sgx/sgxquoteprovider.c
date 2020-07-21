@@ -64,6 +64,7 @@ oe_result_t oe_get_sgx_quote_verification_collateral(
 
     uint8_t* fmspc = args->fmspc;
     uint16_t fmspc_size = sizeof(args->fmspc);
+
     if (args->collateral_provider == CRL_CA_PROCESSOR)
         ca_type = "processor";
     else if (args->collateral_provider == CRL_CA_PLATFORM)
