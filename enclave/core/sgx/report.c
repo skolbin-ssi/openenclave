@@ -13,10 +13,10 @@
 #include <openenclave/internal/safecrt.h>
 #include <openenclave/internal/safemath.h>
 #include <openenclave/internal/sgx/plugin.h>
+#include <openenclave/internal/sgx/td.h>
 #include <openenclave/internal/utils.h>
 #include "platform_t.h"
 
-#if !defined(OE_USE_BUILTIN_EDL)
 /**
  * Declare the prototypes of the following functions to avoid the
  * missing-prototypes warning.
@@ -88,8 +88,6 @@ oe_result_t _oe_get_quote_ocall(
 }
 OE_WEAK_ALIAS(_oe_get_quote_ocall, oe_get_quote_ocall);
 
-#endif
-
 OE_STATIC_ASSERT(OE_REPORT_DATA_SIZE == sizeof(sgx_report_data_t));
 
 OE_STATIC_ASSERT(sizeof(oe_identity_t) == 96);
@@ -128,6 +126,9 @@ oe_result_t sgx_create_report(
     if (report_data != NULL)
         OE_CHECK(oe_memcpy_s(
             &rd, sizeof(sgx_report_data_t), report_data, report_data_size));
+
+    if (oe_sgx_get_td()->simulate)
+        OE_RAISE(OE_UNSUPPORTED);
 
     /* Invoke EREPORT instruction */
     asm volatile("ENCLU"
@@ -270,11 +271,6 @@ oe_result_t oe_get_remote_report(
     sgx_report_t sgx_report = {{{0}}};
     size_t sgx_report_size = sizeof(sgx_report);
     sgx_quote_t* sgx_quote = NULL;
-
-    // For remote attestation, the Quoting Enclave's target info is used.
-    // opt_params must not be supplied.
-    if (opt_params != NULL || opt_params_size != 0)
-        OE_RAISE(OE_INVALID_PARAMETER);
 
     /*
      * OCall: Get target info from Quoting Enclave.

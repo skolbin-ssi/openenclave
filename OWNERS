@@ -1,0 +1,24 @@
+approvers:
+  - AevaOnline
+  - gupta-ak
+  - achamayou
+  - anakrish
+  - andschwa
+  - dthaler
+  - johnkord
+  - mikbras
+  - radhikaj
+reviewers:
+  - AevaOnline
+  - gupta-ak
+  - achamayou
+  - anakrish
+  - andschwa
+  - dthaler
+  - johnkord
+  - mikbras
+  - radhikaj
+
+emeritus_approvers:
+  - jhand2    # 2020-11-05
+  - CodeMonkeyLeet #2021-04-05

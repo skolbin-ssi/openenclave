@@ -33,6 +33,10 @@ OE_EXTERNC_BEGIN
  * @endcond
  */
 
+#ifndef _WIN32
+#define sscanf_s sscanf
+#endif
+
 /**
  * OP-TEE provides single-threaded enclaves only, and its ELF loader does not
  * support thread-local relocations. Hence, any enclave that includes a
@@ -658,6 +662,8 @@ typedef oe_result_t (
  * certificate before validating this evidence. An optional
  * enclave_identity_callback could be passed in for a calling client to further
  * validate the identity of the enclave creating the quote.
+ * OE_FAILURE is returned if the expected certificate extension OID is not
+ * found.
  * @param[in] cert_in_der a pointer to buffer holding certificate contents
  *  in DER format
  * @param[in] cert_in_der_len size of certificate buffer above

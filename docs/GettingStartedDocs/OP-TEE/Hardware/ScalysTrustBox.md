@@ -45,8 +45,6 @@ environments!**
 - Wired network (Ethernet)
   - Optional
 
-**Note:** The procedure below has not been validated on Ubuntu 16.04 LTS.
-
 ### Required Packages
 
 The following command installs all the packages necessary on Ubuntu 18.04 LTS:
@@ -353,7 +351,6 @@ cd build
 # Configure the SDK
 cmake ../sdk \
     -G Ninja \
-	-DHAS_QUOTE_PROVIDER=OFF \
 	-DCMAKE_TOOLCHAIN_FILE=../sdk/cmake/arm-cross.cmake \
 	-DOE_TA_DEV_KIT_DIR=$PWD/../lsdk/build/optee/export-ta_arm64 \
 	-DCMAKE_BUILD_TYPE=Debug

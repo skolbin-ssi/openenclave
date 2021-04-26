@@ -6,6 +6,7 @@
 #include <openenclave/enclave.h>
 #include <openenclave/internal/print.h>
 #include <openenclave/internal/syscall/device.h>
+#include <openenclave/internal/syscall/sys/syscall.h>
 #include <openenclave/internal/syscall/unistd.h>
 #include <openenclave/internal/tests.h>
 #include <stdio.h>
@@ -106,6 +107,10 @@ static void test_create_file(FILE_SYSTEM& fs, const char* tmp_dir)
         ssize_t n = fs.write(file, ALPHABET, sizeof(ALPHABET));
         OE_TEST(n == sizeof(ALPHABET));
     }
+
+    /* Sync the file. */
+    OE_TEST(fs.fdatasync(file) == 0);
+    OE_TEST(fs.fsync(file) == 0);
 
     /* Close the file. */
     OE_TEST(fs.close(file) == 0);
@@ -240,7 +245,7 @@ template <class FILE_SYSTEM>
 static void test_stat_file(FILE_SYSTEM& fs, const char* tmp_dir)
 {
     char path[OE_PAGE_SIZE];
-    typename FILE_SYSTEM::stat_type buf;
+    typename FILE_SYSTEM::stat_type buf, fbuf;
 
     printf("--- %s()\n", __FUNCTION__);
 
@@ -256,6 +261,20 @@ static void test_stat_file(FILE_SYSTEM& fs, const char* tmp_dir)
     OE_TEST(
         (buf.st_mode & ((OE_S_IFREG | MODE) & (OE_S_IRUSR | OE_S_IWUSR))) ==
         ((OE_S_IFREG | MODE) & (OE_S_IRUSR | OE_S_IWUSR)));
+
+    /* fstat should return the same result as stat */
+    const auto file = fs.open(path, 0, 0);
+    OE_TEST(file);
+    OE_TEST(fs.fstat(file, &fbuf) == 0);
+    OE_TEST(fs.close(file) == 0);
+    OE_TEST(fbuf.st_ino == buf.st_ino);
+    OE_TEST(fbuf.st_nlink == buf.st_nlink);
+    OE_TEST(fbuf.st_mode == buf.st_mode);
+    OE_TEST(fbuf.st_uid == buf.st_uid);
+    OE_TEST(fbuf.st_gid == buf.st_gid);
+    OE_TEST(fbuf.st_size == buf.st_size);
+    OE_TEST(fbuf.st_blksize == buf.st_blksize);
+    OE_TEST(fbuf.st_blocks == buf.st_blocks);
 }
 
 template <class FILE_SYSTEM>
@@ -379,12 +398,33 @@ static void test_truncate_file(FILE_SYSTEM& fs, const char* tmp_dir)
 
     mkpath(path, tmp_dir, "alphabet");
 
-    /* Remove the file. */
+    /* Truncate the file. */
     OE_TEST(fs.truncate(path, 5) == 0);
 
     /* Stat the file. */
     OE_TEST(fs.stat(path, &buf) == 0);
     OE_TEST(buf.st_size == 5);
+}
+
+template <class FILE_SYSTEM>
+static void test_ftruncate_file(FILE_SYSTEM& fs, const char* tmp_dir)
+{
+    char path[OE_PAGE_SIZE];
+    typename FILE_SYSTEM::stat_type buf;
+
+    printf("--- %s()\n", __FUNCTION__);
+
+    mkpath(path, tmp_dir, "alphabet");
+
+    /* Truncate the file. */
+    const auto file = fs.open(path, O_WRONLY, 0);
+    OE_TEST(file);
+    OE_TEST(fs.ftruncate(file, 4) == 0);
+    OE_TEST(fs.close(file) == 0);
+
+    /* Stat the file. */
+    OE_TEST(fs.stat(path, &buf) == 0);
+    OE_TEST(buf.st_size == 4);
 }
 
 template <class FILE_SYSTEM>
@@ -426,6 +466,7 @@ void test_common(FILE_SYSTEM& fs, const char* tmp_dir)
     test_rename_file(fs, tmp_dir);
     test_readdir(fs, tmp_dir);
     test_truncate_file(fs, tmp_dir);
+    test_ftruncate_file(fs, tmp_dir);
     test_unlink_file(fs, tmp_dir);
     test_invalid_path(fs);
     cleanup(fs, tmp_dir);
@@ -786,6 +827,13 @@ void test_fs(const char* src_dir, const char* tmp_dir)
     {
         char buf[OE_PATH_MAX];
         OE_TEST(oe_getcwd(buf, sizeof(buf)));
+        OE_TEST(strcmp(buf, "/") == 0);
+    }
+
+    /* Test SYS_getcwd */
+    {
+        char buf[OE_PATH_MAX];
+        OE_TEST(syscall(OE_SYS_getcwd, buf, sizeof(buf)) == 2);
         OE_TEST(strcmp(buf, "/") == 0);
     }
 

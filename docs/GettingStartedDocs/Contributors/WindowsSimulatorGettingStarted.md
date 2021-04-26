@@ -5,7 +5,7 @@
 Intel® X86-64bit architecture
 
 A version of Windows OS :
-- For server: Windows Server 2016 or 2019
+- For server: Windows Server 2019
 - For client: Windows 10 64-bit version 1709 or newer
 - To check your Windows version, run `winver` from the command line
 
@@ -49,7 +49,7 @@ To deploy all the prerequisities for building Open Enclave, you can run the
 following from PowerShell:
 
 ```powershell
-./scripts/install-windows-prereqs.ps1 -InstallPath C:/oe_prereqs -LaunchConfiguration SGX1-NoDriver -DCAPClientType None
+./scripts/install-windows-prereqs.ps1 -InstallPath C:/oe_prereqs -LaunchConfiguration SGX1-NoIntelDrivers -DCAPClientType None
 ```
 
 ## Building on Windows using Developer Command Prompt
@@ -69,7 +69,7 @@ To build debug enclaves:
 cd C:/Users/test/openenclave
 mkdir build/x64-Debug
 cd build/x64-Debug
-cmake -G Ninja -DHAS_QUOTE_PROVIDER=OFF -DNUGET_PACKAGE_PATH=C:/oe_prereqs -DCMAKE_INSTALL_PREFIX=C:/openenclave ../..
+cmake -G Ninja -DNUGET_PACKAGE_PATH=C:/oe_prereqs -DCMAKE_INSTALL_PREFIX=C:/openenclave ../..
 ninja
 ```
 

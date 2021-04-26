@@ -2,10 +2,16 @@
 // Licensed under the MIT License.
 
 #include <errno.h>
-#include <openenclave/host_verify.h>
+
+#include <openenclave/attestation/sgx/evidence.h>
+#include <openenclave/attestation/verifier.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef OE_WITH_EXPERIMENTAL_EEID
+#include <openenclave/attestation/sgx/eeid_verifier.h>
+#endif
 
 size_t get_filesize(FILE* fp)
 {
@@ -98,6 +104,10 @@ oe_result_t verify_report(
     uint8_t* report_data = NULL;
     size_t endorsement_file_size = 0;
     uint8_t* endorsement_data = NULL;
+    oe_claim_t* claims = NULL;
+    size_t claims_length = 0;
+    static const oe_uuid_t _uuid_legacy_report_remote = {
+        OE_FORMAT_UUID_LEGACY_REPORT_REMOTE};
 
     if (read_binary_file(report_filename, &report_data, &report_file_size))
     {
@@ -109,12 +119,22 @@ oe_result_t verify_report(
                 &endorsement_file_size);
         }
 
-        result = oe_verify_remote_report(
+        result = oe_verify_evidence(
+            &_uuid_legacy_report_remote,
             report_data,
             report_file_size,
             endorsement_data,
             endorsement_file_size,
-            NULL);
+            NULL,
+            0,
+            &claims,
+            &claims_length);
+    }
+
+    printf("Printing Claim Names(Claim value size)\n");
+    for (size_t j = 0; j < claims_length; j++)
+    {
+        printf("%s(%zu) \n", claims[j].name, claims[j].value_size);
     }
 
     if (report_data != NULL)
@@ -130,27 +150,89 @@ oe_result_t verify_report(
     return result;
 }
 
-oe_result_t enclave_identity_verifier(oe_identity_t* identity, void* arg)
+oe_result_t verify_evidence(
+    const char* evidence_filename,
+    const char* endorsements_filename)
 {
+    oe_result_t result = OE_FAILURE;
+    uint8_t *evidence = NULL, *endorsements = NULL;
+    size_t evidence_size = 0, endorsements_size = 0;
+
+    if (read_binary_file(evidence_filename, &evidence, &evidence_size))
+    {
+        if (endorsements_filename &&
+            !read_binary_file(
+                endorsements_filename, &endorsements, &endorsements_size))
+            return OE_INVALID_PARAMETER;
+
+        const oe_policy_t* policies = NULL;
+        size_t policies_size = 0;
+        oe_claim_t* claims = NULL;
+        size_t claims_length = 0;
+
+        result = oe_verify_evidence(
+            NULL,
+            evidence,
+            evidence_size,
+            endorsements,
+            endorsements_size,
+            policies,
+            policies_size,
+            &claims,
+            &claims_length);
+
+        oe_free_claims(claims, claims_length);
+        free(evidence);
+        free(endorsements);
+    }
+
+    return result;
+}
+
+oe_result_t enclave_claims_verifier(
+    oe_claim_t* claims,
+    size_t claims_length,
+    void* arg)
+{
+    oe_result_t result = OE_VERIFY_FAILED;
+
     (void)arg;
+    printf("enclave_claims_verifier is called with claims:\n");
 
-    printf(
-        "Enclave certificate contains the following identity information:\n");
-    printf("identity.security_version = %d\n", identity->security_version);
+    for (size_t i = 0; i < claims_length; i++)
+    {
+        oe_claim_t* claim = &claims[i];
+        if (strcmp(claim->name, OE_CLAIM_SECURITY_VERSION) == 0)
+        {
+            uint32_t security_version = *(uint32_t*)(claim->value);
+            // Check the enclave's security version
+            if (security_version < 1)
+            {
+                printf(
+                    "identity->security_version checking failed (%d)\n",
+                    security_version);
+                goto done;
+            }
+        }
+        // Dump an enclave's unique ID, signer ID and Product ID. They are
+        // MRENCLAVE, MRSIGNER and ISVPRODID for SGX enclaves. In a real
+        // scenario, custom id checking should be done here
+        else if (
+            strcmp(claim->name, OE_CLAIM_SIGNER_ID) == 0 ||
+            strcmp(claim->name, OE_CLAIM_UNIQUE_ID) == 0 ||
+            strcmp(claim->name, OE_CLAIM_PRODUCT_ID) == 0)
+        {
+            printf("Enclave %s:\n", claim->name);
+            for (size_t j = 0; j < claim->value_size; j++)
+            {
+                printf("0x%0x ", claim->value[j]);
+            }
+        }
+    }
 
-    printf("identity->unique_id:\n0x ");
-    for (int i = 0; i < 32; i++)
-        printf("%0x ", (uint8_t)identity->unique_id[i]);
-
-    printf("\nidentity->signer_id:\n0x ");
-    for (int i = 0; i < 32; i++)
-        printf("%0x ", (uint8_t)identity->signer_id[i]);
-
-    printf("\nidentity->product_id:\n0x ");
-    for (int i = 0; i < 16; i++)
-        printf("%0x ", (uint8_t)identity->product_id[i]);
-
-    return OE_OK;
+    result = OE_OK;
+done:
+    return result;
 }
 
 oe_result_t verify_cert(const char* filename)
@@ -158,11 +240,15 @@ oe_result_t verify_cert(const char* filename)
     oe_result_t result = OE_FAILURE;
     size_t cert_file_size = 0;
     uint8_t* cert_data = NULL;
+    uint8_t* endorsements_buffer = NULL;
+    size_t endorsements_buffer_size = 0;
+    oe_policy_t* policies = NULL;
+    size_t policies_size = 0;
 
     if (read_binary_file(filename, &cert_data, &cert_file_size))
     {
-        result = oe_verify_attestation_certificate(
-            cert_data, cert_file_size, enclave_identity_verifier, NULL);
+        result = oe_verify_attestation_certificate_with_evidence(
+            cert_data, cert_file_size, enclave_claims_verifier, NULL);
     }
 
     if (cert_data != NULL)
@@ -177,8 +263,11 @@ void print_syntax(const char* program_name)
 {
     fprintf(
         stdout,
-        "Usage:\n  %s -r <report_file> [-e <endorsement_file>]\n  %s -c "
-        "<certificate_file>\n",
+        "Usage:\n"
+        "  %s -r <report_file> [-e <endorsement_file>]\n"
+        "  %s -v <evidence_file> [-e <endorsement_file>]\n"
+        "  %s -c <certificate_file>\n",
+        program_name,
         program_name,
         program_name);
     fprintf(
@@ -195,6 +284,7 @@ void print_syntax(const char* program_name)
 int main(int argc, const char* argv[])
 {
     const char* report_filename = NULL;
+    const char* evidence_filename = NULL;
     const char* endorsement_filename = NULL;
     const char* certificate_filename = NULL;
     oe_result_t result = OE_FAILURE;
@@ -219,6 +309,11 @@ int main(int argc, const char* argv[])
             if (argc > (n - 1))
                 report_filename = argv[++n];
         }
+        else if (memcmp(argv[n], "-v", 2) == 0)
+        {
+            if (argc > (n - 1))
+                evidence_filename = argv[++n];
+        }
         else if (memcmp(argv[n], "-e", 2) == 0)
         {
             if (argc > (n - 1))
@@ -236,13 +331,19 @@ int main(int argc, const char* argv[])
         }
     }
 
-    if (report_filename == NULL && certificate_filename == NULL)
+    if (report_filename == NULL && certificate_filename == NULL &&
+        evidence_filename == NULL)
     {
         print_syntax(argv[0]);
         return 1;
     }
     else
     {
+        oe_verifier_initialize();
+#ifdef OE_WITH_EXPERIMENTAL_EEID
+        oe_sgx_eeid_verifier_initialize();
+#endif
+
         if (report_filename != NULL)
         {
             fprintf(stdout, "Verifying report %s...\n", report_filename);
@@ -250,6 +351,17 @@ int main(int argc, const char* argv[])
             fprintf(
                 stdout,
                 "Report verification %s (%u).\n\n",
+                (result == OE_OK) ? "succeeded" : "failed",
+                result);
+        }
+
+        if (evidence_filename != NULL)
+        {
+            fprintf(stdout, "Verifying evidence %s...\n", evidence_filename);
+            result = verify_evidence(evidence_filename, endorsement_filename);
+            fprintf(
+                stdout,
+                "Evidence verification %s (%u).\n\n",
                 (result == OE_OK) ? "succeeded" : "failed",
                 result);
         }
@@ -265,6 +377,11 @@ int main(int argc, const char* argv[])
                 (result == OE_OK) ? "succeeded" : "failed",
                 result);
         }
+
+#ifdef OE_WITH_EXPERIMENTAL_EEID
+        oe_sgx_eeid_verifier_shutdown();
+#endif
+        oe_verifier_shutdown();
     }
 
     return 0;

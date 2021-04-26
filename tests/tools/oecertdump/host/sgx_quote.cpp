@@ -305,64 +305,76 @@ oe_result_t output_sgx_report(const uint8_t* report, size_t report_size)
     printf("            cpusvn (hex): ");
     oe_hex_dump(report_body->cpusvn, OE_COUNTOF(report_body->cpusvn));
     printf("            miscselect: 0x%x\n", report_body->miscselect);
+    printf("            isvextprodid (hex): ");
+    oe_hex_dump(
+        report_body->isvextprodid, OE_COUNTOF(report_body->isvextprodid));
     printf("            attributes (hex): ");
     oe_hex_dump(&report_body->attributes, sizeof(report_body->attributes));
     printf("            mrenclave (hex): ");
-    oe_hex_dump(report_body->mrenclave, sizeof(report_body->mrenclave));
+    oe_hex_dump(report_body->mrenclave, OE_COUNTOF(report_body->mrenclave));
     printf("            mrsigner (hex): ");
-    oe_hex_dump(report_body->mrsigner, sizeof(report_body->mrsigner));
+    oe_hex_dump(report_body->mrsigner, OE_COUNTOF(report_body->mrsigner));
+    printf("            configid (hex): ");
+    oe_hex_dump(report_body->configid, OE_COUNTOF(report_body->configid));
     printf("            isvprodid: 0x%x\n", report_body->isvprodid);
     printf("            isvsvn: 0x%x\n", report_body->isvsvn);
+    printf("            configsvn: 0x%x\n", report_body->configsvn);
+    printf("            isvfamilyid (hex): ");
+    oe_hex_dump(report_body->isvfamilyid, OE_COUNTOF(report_body->isvfamilyid));
     printf("            report_data (hex): ");
     oe_hex_dump(&report_body->report_data, sizeof(report_body->report_data));
     printf("        } report_body\n");
 
     printf("        signature_len: %d\n", quote->signature_len);
-    printf("        sgx_quote_auth_data_t {\n");
-    printf("            signature (hex): ");
+    printf("        signature_data: {\n");
+    printf("            sgx_quote_auth_data_t {\n");
+    printf("                signature (hex): ");
     oe_hex_dump(
         &quote_auth_data->signature, sizeof(quote_auth_data->signature));
-    printf("            attestation_key (hex): ");
+    printf("                attestation_key (hex): ");
     oe_hex_dump(
         &quote_auth_data->attestation_key,
         sizeof(quote_auth_data->attestation_key));
 
-    printf("            qe_report_body {\n");
-    printf("                cpusvn (hex): ");
+    printf("                qe_report_body {\n");
+    printf("                    cpusvn (hex): ");
     oe_hex_dump(qe_report_body->cpusvn, OE_COUNTOF(qe_report_body->cpusvn));
-    printf("                miscselect: 0x%x\n", qe_report_body->miscselect);
-    printf("                attributes (hex): ");
+    printf(
+        "                    miscselect: 0x%x\n", qe_report_body->miscselect);
+    printf("                    attributes (hex): ");
     oe_hex_dump(
         &qe_report_body->attributes, sizeof(qe_report_body->attributes));
-    printf("                mrenclave (hex): ");
-    oe_hex_dump(qe_report_body->mrenclave, sizeof(qe_report_body->mrenclave));
-    printf("                mrsigner (hex): ");
-    oe_hex_dump(qe_report_body->mrsigner, sizeof(qe_report_body->mrsigner));
-    printf("                isvprodid: 0x%x\n", qe_report_body->isvprodid);
-    printf("                isvsvn: 0x%x\n", qe_report_body->isvsvn);
-    printf("                report_data (hex): ");
+    printf("                    mrenclave (hex): ");
+    oe_hex_dump(
+        qe_report_body->mrenclave, OE_COUNTOF(qe_report_body->mrenclave));
+    printf("                    mrsigner (hex): ");
+    oe_hex_dump(qe_report_body->mrsigner, OE_COUNTOF(qe_report_body->mrsigner));
+    printf("                    isvprodid: 0x%x\n", qe_report_body->isvprodid);
+    printf("                    isvsvn: 0x%x\n", qe_report_body->isvsvn);
+    printf("                    report_data (hex): ");
     oe_hex_dump(
         &qe_report_body->report_data, sizeof(qe_report_body->report_data));
-    printf("            } qe_report_body\n");
+    printf("                } qe_report_body\n");
 
-    printf("        qe_report_body_signature: ");
+    printf("                qe_report_body_signature: ");
     oe_hex_dump(
         &quote_auth_data->qe_report_body_signature,
         sizeof(quote_auth_data->qe_report_body_signature));
-    printf("        } sgx_quote_auth_data_t\n");
-    printf("    } sgx_quote_t\n");
-    printf("    qe_auth_data {\n");
-    printf("        size: %d\n", qe_auth_data.size);
-    printf("        data (hex): ");
+    printf("            } sgx_quote_auth_data_t\n");
+    printf("            qe_auth_data {\n");
+    printf("                size: %d\n", qe_auth_data.size);
+    printf("                data (hex): ");
     oe_hex_dump(qe_auth_data.data, qe_auth_data.size);
-    printf("    } qe_auth_data\n");
+    printf("            } qe_auth_data\n");
 
-    printf("    qe_cert_data {\n");
-    printf("        type: 0x%x\n", qe_cert_data.type);
-    printf("        size: %d\n", qe_cert_data.size);
-    printf("        qe cert:\n");
+    printf("            qe_cert_data {\n");
+    printf("                type: 0x%x\n", qe_cert_data.type);
+    printf("                size: %d\n", qe_cert_data.size);
+    printf("                qe cert:\n");
     output_certificate_chain(qe_cert_data.data, qe_cert_data.size, true);
-    printf("    } qe_cert_data\n");
+    printf("            } qe_cert_data\n");
+    printf("        } signature_data\n");
+    printf("    } sgx_quote_t\n");
 
     printf("} oe_report_header\n");
 

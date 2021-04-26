@@ -6,7 +6,7 @@ but not for development and building.
 
 ## Platform Requirements
 
-- Ubuntu 16.04 LTS (64-bit) or 18.04 LTS (64-bit)
+- Ubuntu 18.04 LTS (64-bit)
 
 ## Clone the Open Enclave SDK
 
@@ -51,7 +51,6 @@ cd build
 
 cmake ../sdk \
     -G Ninja \
-	-DHAS_QUOTE_PROVIDER=OFF \
 	-DCMAKE_TOOLCHAIN_FILE=../sdk/cmake/arm-cross.cmake \
 	-DOE_TA_DEV_KIT_DIR=$DEV_KIT/export-ta_arm64 \
 	-DCMAKE_BUILD_TYPE=Debug

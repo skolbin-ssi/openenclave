@@ -7,7 +7,8 @@
 
 /* Note: The variables below are initialized during enclave loading */
 
-extern volatile const oe_sgx_enclave_properties_t oe_enclave_properties_sgx;
+OE_EXPORT extern volatile const oe_sgx_enclave_properties_t
+    oe_enclave_properties_sgx;
 
 /**
  *****************************************************************************
@@ -124,9 +125,9 @@ extern volatile const oe_sgx_enclave_properties_t oe_enclave_properties_sgx;
  *
  **/
 
-static volatile uint64_t _enclave_rva;
-static volatile uint64_t _reloc_rva;
-static volatile uint64_t _reloc_size;
+OE_EXPORT volatile uint64_t _enclave_rva;
+OE_EXPORT volatile uint64_t _reloc_rva;
+OE_EXPORT volatile uint64_t _reloc_size;
 
 #ifdef OE_WITH_EXPERIMENTAL_EEID
 oe_eeid_t* oe_eeid = NULL;
@@ -267,4 +268,18 @@ uint64_t oe_get_num_heap_pages(void)
 uint64_t oe_get_num_pages(void)
 {
     return __oe_get_enclave_size() / OE_PAGE_SIZE;
+}
+
+/*
+**==============================================================================
+**
+** Information for the module.
+**
+**==============================================================================
+*/
+OE_EXPORT const volatile oe_enclave_module_info_t _module_info;
+
+const oe_enclave_module_info_t* oe_get_module_info(void)
+{
+    return (const oe_enclave_module_info_t*)&_module_info;
 }

@@ -2,13 +2,14 @@
 // Licensed under the MIT License.
 
 #include <openenclave/attestation/sgx/evidence.h>
+#include <openenclave/attestation/verifier.h>
+#include <openenclave/bits/sgx/sgxtypes.h>
 #include <openenclave/internal/hexdump.h>
 #include <openenclave/internal/plugin.h>
 #include <openenclave/internal/raise.h>
 #include <openenclave/internal/report.h>
 #include <openenclave/internal/safemath.h>
 #include <openenclave/internal/sgx/plugin.h>
-#include <openenclave/internal/tests.h>
 
 #include "../attest_plugin.h"
 #include "../common.h"
@@ -32,12 +33,13 @@ typedef oe_mutex oe_mutex_t;
 #define OE_MUTEX_INITIALIZER OE_H_MUTEX_INITIALIZER
 #endif
 
-static const oe_uuid_t _local_uuid = {OE_FORMAT_UUID_SGX_LOCAL_ATTESTATION};
-static const oe_uuid_t _ecdsa_uuid = {OE_FORMAT_UUID_SGX_ECDSA_P256};
-static const oe_uuid_t _ecdsa_report_uuid = {
-    OE_FORMAT_UUID_SGX_ECDSA_P256_REPORT};
-static const oe_uuid_t _ecdsa_quote_uuid = {
-    OE_FORMAT_UUID_SGX_ECDSA_P256_QUOTE};
+static const oe_uuid_t _uuid_sgx_local_attestation = {
+    OE_FORMAT_UUID_SGX_LOCAL_ATTESTATION};
+static const oe_uuid_t _uuid_sgx_ecdsa = {OE_FORMAT_UUID_SGX_ECDSA};
+static const oe_uuid_t _uuid_legacy_report_remote = {
+    OE_FORMAT_UUID_LEGACY_REPORT_REMOTE};
+static const oe_uuid_t _uuid_raw_sgx_quote_ecdsa = {
+    OE_FORMAT_UUID_RAW_SGX_QUOTE_ECDSA};
 
 static oe_result_t _on_register(
     oe_attestation_role_t* context,
@@ -67,7 +69,7 @@ static void _free_claim(oe_claim_t* claim)
     oe_free(claim->value);
 }
 
-static oe_result_t _free_claims(
+oe_result_t oe_sgx_free_claims_list(
     oe_verifier_t* context,
     oe_claim_t* claims,
     size_t claims_length)
@@ -111,17 +113,16 @@ static oe_result_t _get_input_time(
 }
 
 static oe_result_t _verify_local_report(
-    const uint8_t* evidence_buffer,
-    size_t evidence_buffer_size)
+    const uint8_t* report_body,
+    size_t report_body_size)
 {
     // Do a normal report verification on the enclave side.
     // Local report verification is unsupported for host side.
 #ifdef OE_BUILD_ENCLAVE
-    return oe_verify_report_internal(
-        evidence_buffer, evidence_buffer_size, NULL);
+    return oe_verify_raw_sgx_report(report_body, report_body_size);
 #else
-    OE_UNUSED(evidence_buffer);
-    OE_UNUSED(evidence_buffer_size);
+    OE_UNUSED(report_body);
+    OE_UNUSED(report_body_size);
     return OE_UNSUPPORTED;
 #endif
 }
@@ -131,8 +132,8 @@ static oe_result_t _verify_local_report(
 static oe_result_t _process_sgx_report_data(
     const sgx_evidence_format_type_t format_type,
     const uint8_t* report_body, // Raw SGX quote or report
-    const uint8_t* custom_claims,
-    size_t custom_claims_size,
+    const uint8_t* custom_claims_buffer,
+    size_t custom_claims_buffer_size,
     sgx_report_data_t* report_data_out)
 {
     oe_result_t result = OE_UNEXPECTED;
@@ -151,8 +152,8 @@ static oe_result_t _process_sgx_report_data(
 
         OE_UNUSED(report_data_out);
 
-        OE_CHECK(oe_sgx_hash_custom_claims(
-            custom_claims, custom_claims_size, &hash));
+        OE_CHECK(oe_sgx_hash_custom_claims_buffer(
+            custom_claims_buffer, custom_claims_buffer_size, &hash));
 
         if (format_type == SGX_FORMAT_TYPE_REMOTE)
             report_data =
@@ -170,8 +171,8 @@ static oe_result_t _process_sgx_report_data(
         // These types of evidence does not contain custom claims buffer.
         // SGX report data is returned.
 
-        OE_UNUSED(custom_claims);
-        OE_UNUSED(custom_claims_size);
+        OE_UNUSED(custom_claims_buffer);
+        OE_UNUSED(custom_claims_buffer_size);
 
         if (!report_data_out)
             OE_RAISE(OE_INVALID_PARAMETER);
@@ -184,7 +185,7 @@ done:
     return result;
 }
 
-static oe_result_t _add_claim(
+oe_result_t oe_sgx_add_claim(
     oe_claim_t* claim,
     const void* name,
     size_t name_size, // Must cover the '\0' at end of string
@@ -216,8 +217,9 @@ static oe_result_t _fill_with_known_claims(
     const sgx_evidence_format_type_t format_type,
     const oe_uuid_t* format_id,
     const uint8_t* report_body,
-    size_t report_body_size,
     const oe_sgx_endorsements_t* sgx_endorsements,
+    oe_datetime_t* valid_from,
+    oe_datetime_t* valid_until,
     oe_claim_t* claims,
     size_t claims_length,
     size_t* claims_added)
@@ -225,27 +227,36 @@ static oe_result_t _fill_with_known_claims(
     oe_result_t result = OE_UNEXPECTED;
     oe_report_t parsed_report = {0};
     oe_identity_t* id = &parsed_report.identity;
+    const sgx_report_body_t* sgx_report_body = NULL;
     size_t claims_index = 0;
-    oe_datetime_t valid_from = {0};
-    oe_datetime_t valid_until = {0};
+    bool flag;
 
-    if (claims_length < OE_REQUIRED_CLAIMS_COUNT)
+    if (claims_length < OE_REQUIRED_CLAIMS_COUNT + OE_SGX_REQUIRED_CLAIMS_COUNT)
         OE_RAISE(OE_INVALID_PARAMETER);
 
     if (format_type == SGX_FORMAT_TYPE_LOCAL)
-        OE_CHECK(oe_parse_sgx_report_body(
-            &((sgx_report_t*)report_body)->body, false, &parsed_report));
+    {
+        sgx_report_body = &((sgx_report_t*)report_body)->body;
+        OE_CHECK(
+            oe_parse_sgx_report_body(sgx_report_body, false, &parsed_report));
+    }
+
     else
-        OE_CHECK(oe_parse_sgx_report_body(
-            &((sgx_quote_t*)report_body)->report_body, true, &parsed_report));
+    {
+        sgx_report_body = &((sgx_quote_t*)report_body)->report_body;
+        OE_CHECK(
+            oe_parse_sgx_report_body(sgx_report_body, true, &parsed_report));
+    }
 
     // Optional claims are needed for SGX quotes for remote attestation
     if (format_type != SGX_FORMAT_TYPE_LOCAL &&
-        claims_length < OE_REQUIRED_CLAIMS_COUNT + OE_OPTIONAL_CLAIMS_COUNT)
+        claims_length < OE_REQUIRED_CLAIMS_COUNT + OE_OPTIONAL_CLAIMS_COUNT +
+                            OE_SGX_REQUIRED_CLAIMS_COUNT +
+                            OE_SGX_OPTIONAL_CLAIMS_COUNT)
         OE_RAISE(OE_INVALID_PARAMETER);
 
     // ID version.
-    OE_CHECK(_add_claim(
+    OE_CHECK(oe_sgx_add_claim(
         &claims[claims_index++],
         OE_CLAIM_ID_VERSION,
         sizeof(OE_CLAIM_ID_VERSION),
@@ -253,7 +264,7 @@ static oe_result_t _fill_with_known_claims(
         sizeof(id->id_version)));
 
     // Security version.
-    OE_CHECK(_add_claim(
+    OE_CHECK(oe_sgx_add_claim(
         &claims[claims_index++],
         OE_CLAIM_SECURITY_VERSION,
         sizeof(OE_CLAIM_SECURITY_VERSION),
@@ -261,7 +272,7 @@ static oe_result_t _fill_with_known_claims(
         sizeof(id->security_version)));
 
     // Attributes.
-    OE_CHECK(_add_claim(
+    OE_CHECK(oe_sgx_add_claim(
         &claims[claims_index++],
         OE_CLAIM_ATTRIBUTES,
         sizeof(OE_CLAIM_ATTRIBUTES),
@@ -269,7 +280,7 @@ static oe_result_t _fill_with_known_claims(
         sizeof(id->attributes)));
 
     // Unique ID
-    OE_CHECK(_add_claim(
+    OE_CHECK(oe_sgx_add_claim(
         &claims[claims_index++],
         OE_CLAIM_UNIQUE_ID,
         sizeof(OE_CLAIM_UNIQUE_ID),
@@ -277,7 +288,7 @@ static oe_result_t _fill_with_known_claims(
         sizeof(id->unique_id)));
 
     // Signer ID
-    OE_CHECK(_add_claim(
+    OE_CHECK(oe_sgx_add_claim(
         &claims[claims_index++],
         OE_CLAIM_SIGNER_ID,
         sizeof(OE_CLAIM_SIGNER_ID),
@@ -285,7 +296,7 @@ static oe_result_t _fill_with_known_claims(
         sizeof(id->signer_id)));
 
     // Product ID
-    OE_CHECK(_add_claim(
+    OE_CHECK(oe_sgx_add_claim(
         &claims[claims_index++],
         OE_CLAIM_PRODUCT_ID,
         sizeof(OE_CLAIM_PRODUCT_ID),
@@ -293,38 +304,174 @@ static oe_result_t _fill_with_known_claims(
         sizeof(id->product_id)));
 
     // Plugin UUID
-    OE_CHECK(_add_claim(
+    OE_CHECK(oe_sgx_add_claim(
         &claims[claims_index++],
         OE_CLAIM_FORMAT_UUID,
         sizeof(OE_CLAIM_FORMAT_UUID),
         format_id,
         sizeof(*format_id)));
 
+    // SGX Exit Info Reported to an SSA Frame or Not
+    flag = !!(sgx_report_body->miscselect & SGX_MISC_FLAGS_PF_GP_EXIT_INFO);
+    OE_CHECK(oe_sgx_add_claim(
+        &claims[claims_index++],
+        OE_CLAIM_SGX_PF_GP_EXINFO_ENABLED,
+        sizeof(OE_CLAIM_SGX_PF_GP_EXINFO_ENABLED),
+        &flag,
+        sizeof(flag)));
+
+    // SGX Report ISV Extended Product ID
+    OE_CHECK(oe_sgx_add_claim(
+        &claims[claims_index++],
+        OE_CLAIM_SGX_ISV_EXTENDED_PRODUCT_ID,
+        sizeof(OE_CLAIM_SGX_ISV_EXTENDED_PRODUCT_ID),
+        sgx_report_body->isvextprodid,
+        sizeof(sgx_report_body->isvextprodid)));
+
+    // SGX Report Is Mode 64bit or Not
+    flag = !!(sgx_report_body->attributes.flags & SGX_FLAGS_MODE64BIT);
+    OE_CHECK(oe_sgx_add_claim(
+        &claims[claims_index++],
+        OE_CLAIM_SGX_IS_MODE64BIT,
+        sizeof(OE_CLAIM_SGX_IS_MODE64BIT),
+        &flag,
+        sizeof(flag)));
+
+    // SGX Report Has Provision Key or Not
+    flag = !!(sgx_report_body->attributes.flags & SGX_FLAGS_PROVISION_KEY);
+    OE_CHECK(oe_sgx_add_claim(
+        &claims[claims_index++],
+        OE_CLAIM_SGX_HAS_PROVISION_KEY,
+        sizeof(OE_CLAIM_SGX_HAS_PROVISION_KEY),
+        &flag,
+        sizeof(flag)));
+
+    // SGX Report Has Einittoken Key or Not
+    flag = !!(sgx_report_body->attributes.flags & SGX_FLAGS_EINITTOKEN_KEY);
+    OE_CHECK(oe_sgx_add_claim(
+        &claims[claims_index++],
+        OE_CLAIM_SGX_HAS_EINITTOKEN_KEY,
+        sizeof(OE_CLAIM_SGX_HAS_EINITTOKEN_KEY),
+        &flag,
+        sizeof(flag)));
+
+    // SGX Use KSS or Not
+    flag = !!(sgx_report_body->attributes.flags & SGX_FLAGS_KSS);
+    OE_CHECK(oe_sgx_add_claim(
+        &claims[claims_index++],
+        OE_CLAIM_SGX_USES_KSS,
+        sizeof(OE_CLAIM_SGX_USES_KSS),
+        &flag,
+        sizeof(flag)));
+
+    // SGX Report Config ID
+    OE_CHECK(oe_sgx_add_claim(
+        &claims[claims_index++],
+        OE_CLAIM_SGX_CONFIG_ID,
+        sizeof(OE_CLAIM_SGX_CONFIG_ID),
+        sgx_report_body->configid,
+        sizeof(sgx_report_body->configid)));
+
+    // SGX Report Config SVN
+    OE_CHECK(oe_sgx_add_claim(
+        &claims[claims_index++],
+        OE_CLAIM_SGX_CONFIG_SVN,
+        sizeof(OE_CLAIM_SGX_CONFIG_SVN),
+        &sgx_report_body->configsvn,
+        sizeof(sgx_report_body->configsvn)));
+
+    // SGX Report ISV Family ID
+    OE_CHECK(oe_sgx_add_claim(
+        &claims[claims_index++],
+        OE_CLAIM_SGX_ISV_FAMILY_ID,
+        sizeof(OE_CLAIM_SGX_ISV_FAMILY_ID),
+        sgx_report_body->isvfamilyid,
+        sizeof(sgx_report_body->isvfamilyid)));
+
     if (format_type != SGX_FORMAT_TYPE_LOCAL)
     {
-        // Get quote validity periods to get validity from and until claims.
-        OE_CHECK(oe_get_sgx_quote_validity(
-            report_body,
-            report_body_size,
-            sgx_endorsements,
-            &valid_from,
-            &valid_until));
-
         // Validity from.
-        OE_CHECK(_add_claim(
+        OE_CHECK(oe_sgx_add_claim(
             &claims[claims_index++],
             OE_CLAIM_VALIDITY_FROM,
             sizeof(OE_CLAIM_VALIDITY_FROM),
-            &valid_from,
-            sizeof(valid_from)));
+            valid_from,
+            sizeof(*valid_from)));
 
         // Validity to.
-        OE_CHECK(_add_claim(
+        OE_CHECK(oe_sgx_add_claim(
             &claims[claims_index++],
             OE_CLAIM_VALIDITY_UNTIL,
             sizeof(OE_CLAIM_VALIDITY_UNTIL),
-            &valid_until,
-            sizeof(valid_until)));
+            valid_until,
+            sizeof(*valid_until)));
+
+        // TCB info
+        OE_CHECK(oe_sgx_add_claim(
+            &claims[claims_index++],
+            OE_CLAIM_SGX_TCB_INFO,
+            sizeof(OE_CLAIM_SGX_TCB_INFO),
+            sgx_endorsements->items[OE_SGX_ENDORSEMENT_FIELD_TCB_INFO].data,
+            sgx_endorsements->items[OE_SGX_ENDORSEMENT_FIELD_TCB_INFO].size));
+
+        // TCB issuer chain
+        OE_CHECK(oe_sgx_add_claim(
+            &claims[claims_index++],
+            OE_CLAIM_SGX_TCB_ISSUER_CHAIN,
+            sizeof(OE_CLAIM_SGX_TCB_ISSUER_CHAIN),
+            sgx_endorsements->items[OE_SGX_ENDORSEMENT_FIELD_TCB_ISSUER_CHAIN]
+                .data,
+            sgx_endorsements->items[OE_SGX_ENDORSEMENT_FIELD_TCB_ISSUER_CHAIN]
+                .size));
+
+        // PCK CRL
+        OE_CHECK(oe_sgx_add_claim(
+            &claims[claims_index++],
+            OE_CLAIM_SGX_PCK_CRL,
+            sizeof(OE_CLAIM_SGX_PCK_CRL),
+            sgx_endorsements->items[OE_SGX_ENDORSEMENT_FIELD_CRL_PCK_CERT].data,
+            sgx_endorsements->items[OE_SGX_ENDORSEMENT_FIELD_CRL_PCK_CERT]
+                .size));
+
+        // Root CA CRL
+        OE_CHECK(oe_sgx_add_claim(
+            &claims[claims_index++],
+            OE_CLAIM_SGX_ROOT_CA_CRL,
+            sizeof(OE_CLAIM_SGX_ROOT_CA_CRL),
+            sgx_endorsements->items[OE_SGX_ENDORSEMENT_FIELD_CRL_PCK_PROC_CA]
+                .data,
+            sgx_endorsements->items[OE_SGX_ENDORSEMENT_FIELD_CRL_PCK_PROC_CA]
+                .size));
+
+        // CRL Issuer Chain
+        OE_CHECK(oe_sgx_add_claim(
+            &claims[claims_index++],
+            OE_CLAIM_SGX_CRL_ISSUER_CHAIN,
+            sizeof(OE_CLAIM_SGX_CRL_ISSUER_CHAIN),
+            sgx_endorsements
+                ->items[OE_SGX_ENDORSEMENT_FIELD_CRL_ISSUER_CHAIN_PCK_CERT]
+                .data,
+            sgx_endorsements
+                ->items[OE_SGX_ENDORSEMENT_FIELD_CRL_ISSUER_CHAIN_PCK_CERT]
+                .size));
+
+        // QE ID info
+        OE_CHECK(oe_sgx_add_claim(
+            &claims[claims_index++],
+            OE_CLAIM_SGX_QE_ID_INFO,
+            sizeof(OE_CLAIM_SGX_QE_ID_INFO),
+            sgx_endorsements->items[OE_SGX_ENDORSEMENT_FIELD_QE_ID_INFO].data,
+            sgx_endorsements->items[OE_SGX_ENDORSEMENT_FIELD_QE_ID_INFO].size));
+
+        // QE ID issuer chain
+        OE_CHECK(oe_sgx_add_claim(
+            &claims[claims_index++],
+            OE_CLAIM_SGX_QE_ID_ISSUER_CHAIN,
+            sizeof(OE_CLAIM_SGX_QE_ID_ISSUER_CHAIN),
+            sgx_endorsements->items[OE_SGX_ENDORSEMENT_FIELD_QE_ID_ISSUER_CHAIN]
+                .data,
+            sgx_endorsements->items[OE_SGX_ENDORSEMENT_FIELD_QE_ID_ISSUER_CHAIN]
+                .size));
     }
 
     *claims_added = claims_index;
@@ -339,9 +486,9 @@ done:
     return result;
 }
 
-oe_result_t oe_sgx_hash_custom_claims(
-    const void* custom_claims,
-    size_t custom_claims_size,
+oe_result_t oe_sgx_hash_custom_claims_buffer(
+    const void* custom_claims_buffer,
+    size_t custom_claims_buffer_size,
     OE_SHA256* hash_out)
 {
     oe_result_t result = OE_UNEXPECTED;
@@ -351,13 +498,14 @@ oe_result_t oe_sgx_hash_custom_claims(
         0xc8, 0x99, 0x6f, 0xb9, 0x24, 0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b,
         0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52, 0xb8, 0x55};
 
-    // Produce a hash of the custom_claims.
+    // Produce a hash of the custom_claims_buffer.
     // If there is no data, set to default value
-    if (!custom_claims || !custom_claims_size)
+    if (!custom_claims_buffer || !custom_claims_buffer_size)
         memcpy(hash_out, sha256_for_empty_string, sizeof(*hash_out));
     else
-        // Produce a hash of the custom_claims.
-        OE_CHECK(oe_sha256(custom_claims, custom_claims_size, hash_out));
+        // Produce a hash of the custom_claims_buffer.
+        OE_CHECK(oe_sha256(
+            custom_claims_buffer, custom_claims_buffer_size, hash_out));
 
     result = OE_OK;
 
@@ -370,9 +518,11 @@ oe_result_t oe_sgx_extract_claims(
     const oe_uuid_t* format_id,
     const uint8_t* report_body,
     size_t report_body_size,
-    const uint8_t* custom_claims,
-    size_t custom_claims_size,
+    const uint8_t* custom_claims_buffer,
+    size_t custom_claims_buffer_size,
     const oe_sgx_endorsements_t* sgx_endorsements,
+    oe_datetime_t* valid_from,
+    oe_datetime_t* valid_until,
     oe_claim_t** claims_out,
     size_t* claims_length_out)
 {
@@ -383,39 +533,46 @@ oe_result_t oe_sgx_extract_claims(
     size_t claims_added = 0;
     size_t additional_claim = 0;
     sgx_report_data_t report_data;
+    oe_datetime_t local_valid_from = {0};
+    oe_datetime_t local_valid_until = {0};
 
-    // Note: some callers can have custom_claims pointing to a non-NULL buffer
-    // containing a zero-sized array.
-    if (!format_id || !report_body || !report_body_size ||
-        (!custom_claims && custom_claims_size))
+    // Note: some callers can have custom_claims_buffer pointing to a non-NULL
+    // buffer containing a zero-sized array.
+    if (!format_id || !report_body || !report_body_size || !claims_out ||
+        !claims_length_out ||
+        (!custom_claims_buffer != !custom_claims_buffer_size))
         OE_RAISE(OE_INVALID_PARAMETER);
 
-    // verify the integrity of the custom_claims with hash stored in
+    // verify the integrity of the custom_claims_buffer with hash stored in
     // report_body, or retrieve the SGX report data
     OE_CHECK(_process_sgx_report_data(
         format_type,
         report_body,
-        custom_claims,
-        custom_claims_size,
+        custom_claims_buffer,
+        custom_claims_buffer_size,
         &report_data));
 
-    // If provided, custom_claims can only be the OE_CLAIM_CUSTOM_CLAIMS
-    // or OE_CLAIM_SGX_REPORT_DATA types.
+    // If provided, custom_claims_buffer can only be the
+    // OE_CLAIM_CUSTOM_CLAIMS_BUFFER or OE_CLAIM_SGX_REPORT_DATA types.
     if ((format_type == SGX_FORMAT_TYPE_LOCAL ||
          format_type == SGX_FORMAT_TYPE_REMOTE) &&
-        (!custom_claims || !custom_claims_size))
+        (!custom_claims_buffer || !custom_claims_buffer_size))
         additional_claim = 0;
     else
         additional_claim = 1;
 
     // Get the number of claims we need and allocate the claims.
     OE_CHECK(oe_safe_add_u64(
-        OE_REQUIRED_CLAIMS_COUNT, additional_claim, &claims_length));
+        OE_REQUIRED_CLAIMS_COUNT + OE_SGX_REQUIRED_CLAIMS_COUNT,
+        additional_claim,
+        &claims_length));
 
     if (format_type != SGX_FORMAT_TYPE_LOCAL)
     {
         OE_CHECK(oe_safe_add_u64(
-            claims_length, OE_OPTIONAL_CLAIMS_COUNT, &claims_length));
+            claims_length,
+            OE_OPTIONAL_CLAIMS_COUNT + OE_SGX_OPTIONAL_CLAIMS_COUNT,
+            &claims_length));
     }
 
     OE_CHECK(oe_safe_mul_u64(claims_length, sizeof(oe_claim_t), &claims_size));
@@ -424,13 +581,28 @@ oe_result_t oe_sgx_extract_claims(
     if (claims == NULL)
         OE_RAISE(OE_OUT_OF_MEMORY);
 
+    if (!valid_from || !valid_until)
+    {
+        // Get quote validity periods to get validity from and until claims if
+        // valid_from and valid_until is not provided.
+        OE_CHECK(oe_get_sgx_quote_validity(
+            report_body,
+            report_body_size,
+            sgx_endorsements,
+            &local_valid_from,
+            &local_valid_until));
+        valid_from = &local_valid_from;
+        valid_until = &local_valid_until;
+    }
+
     // Fill the list with the known claims.
     OE_CHECK(_fill_with_known_claims(
         format_type,
         format_id,
         report_body,
-        report_body_size,
         sgx_endorsements,
+        valid_from,
+        valid_until,
         claims,
         claims_length,
         &claims_added));
@@ -442,19 +614,19 @@ oe_result_t oe_sgx_extract_claims(
             format_type == SGX_FORMAT_TYPE_REMOTE)
         {
             // Add custom claims buffer
-            char* name = OE_CLAIM_CUSTOM_CLAIMS;
-            OE_CHECK(_add_claim(
+            char* name = OE_CLAIM_CUSTOM_CLAIMS_BUFFER;
+            OE_CHECK(oe_sgx_add_claim(
                 claims + claims_added,
                 name,
                 oe_strlen(name) + 1,
-                custom_claims,
-                custom_claims_size));
+                custom_claims_buffer,
+                custom_claims_buffer_size));
         }
         else // SGX_FORMAT_TYPE_LEGACY_REPORT and _QUOTE
         {
             // Add SGX report data claim
             char* name = OE_CLAIM_SGX_REPORT_DATA;
-            OE_CHECK(_add_claim(
+            OE_CHECK(oe_sgx_add_claim(
                 claims + claims_added,
                 name,
                 oe_strlen(name) + 1,
@@ -470,11 +642,11 @@ oe_result_t oe_sgx_extract_claims(
 
 done:
     if (claims)
-        _free_claims(NULL, claims, claims_length);
+        oe_sgx_free_claims_list(NULL, claims, claims_length);
     return result;
 }
 
-static oe_result_t _verify_evidence(
+oe_result_t oe_sgx_verify_evidence(
     oe_verifier_t* context,
     const uint8_t* evidence_buffer,
     size_t evidence_buffer_size,
@@ -487,18 +659,21 @@ static oe_result_t _verify_evidence(
 {
     oe_result_t result = OE_UNEXPECTED;
     oe_datetime_t* time = NULL;
+    oe_datetime_t valid_from = {0};
+    oe_datetime_t valid_until = {0};
     uint8_t* local_endorsements_buffer = NULL;
     size_t local_endorsements_buffer_size = 0;
     oe_sgx_endorsements_t sgx_endorsements;
     sgx_evidence_format_type_t format_type = SGX_FORMAT_TYPE_UNKNOWN;
     const uint8_t* report_body = NULL;
     size_t report_body_size = 0;
-    const uint8_t* custom_claims = NULL;
-    size_t custom_claims_size = 0;
+    const uint8_t* custom_claims_buffer = NULL;
+    size_t custom_claims_buffer_size = 0;
     oe_uuid_t* format_id = NULL;
 
-    if (!context || !evidence_buffer || !evidence_buffer_size || !claims ||
-        !claims_length)
+    if (!context || !evidence_buffer || !evidence_buffer_size ||
+        (!endorsements_buffer != !endorsements_buffer_size) ||
+        (!claims != !claims_length))
         OE_RAISE(OE_INVALID_PARAMETER);
 
     format_id = &context->base.format_id;
@@ -506,36 +681,35 @@ static oe_result_t _verify_evidence(
     // Check the datetime policy if it exists.
     OE_CHECK(_get_input_time(policies, policies_size, &time));
 
-    if (!memcmp(format_id, &_local_uuid, sizeof(oe_uuid_t)))
+    if (!memcmp(format_id, &_uuid_sgx_local_attestation, sizeof(oe_uuid_t)))
     {
-        // evidence_buffer has oe_report_header_t header,
-        // followed by an SGX report for local attestation.
-        oe_report_header_t* report = (oe_report_header_t*)evidence_buffer;
+        // evidence_buffer has an SGX report for local attestation
+        // followed by an optional custom claims buffer.
+        // Note: sgx_report_t has no field that can be checked quickly
+        // to verify it being an SGX report.
 
-        if (evidence_buffer_size < sizeof(*report) ||
-            report->version != OE_REPORT_HEADER_VERSION ||
-            report->report_type != OE_REPORT_TYPE_SGX_LOCAL)
+        if (evidence_buffer_size < sizeof(sgx_report_t))
             OE_RAISE(OE_INVALID_PARAMETER);
 
         format_type = SGX_FORMAT_TYPE_LOCAL;
     }
-    else if (!memcmp(format_id, &_ecdsa_uuid, sizeof(oe_uuid_t)))
+    else if (!memcmp(format_id, &_uuid_sgx_ecdsa, sizeof(oe_uuid_t)))
     {
-        // evidence_buffer has oe_report_header_t header,
-        // followed by an SGX ECDSA-p256 quote.
-        oe_report_header_t* report = (oe_report_header_t*)evidence_buffer;
+        // evidence_buffer has an SGX ECDSA-p256 quote
+        // followed by an optional custom claims buffer.
+        sgx_quote_t* quote = (sgx_quote_t*)evidence_buffer;
 
-        if (evidence_buffer_size < sizeof(*report) ||
-            report->version != OE_REPORT_HEADER_VERSION ||
-            report->report_type != OE_REPORT_TYPE_SGX_REMOTE)
+        if (evidence_buffer_size < sizeof(*quote) + quote->signature_len ||
+            quote->version != SGX_QE3_QUOTE_VERSION ||
+            quote->sign_type != SGX_QL_ALG_ECDSA_P256)
             OE_RAISE(OE_INVALID_PARAMETER);
 
         format_type = SGX_FORMAT_TYPE_REMOTE;
     }
-    else if (!memcmp(format_id, &_ecdsa_report_uuid, sizeof(oe_uuid_t)))
+    else if (!memcmp(format_id, &_uuid_legacy_report_remote, sizeof(oe_uuid_t)))
     {
-        // evidence_buffer has an oe_report_header_t header,
-        // followed by an SGX ECDSA-p256 quote.
+        // evidence_buffer has an oe_report_header_t header
+        // followed by an SGX report or ECDSA-p256 quote.
         oe_report_header_t* report = (oe_report_header_t*)evidence_buffer;
 
         if (evidence_buffer_size < sizeof(*report) ||
@@ -545,10 +719,17 @@ static oe_result_t _verify_evidence(
 
         format_type = SGX_FORMAT_TYPE_LEGACY_REPORT;
     }
-    else if (!memcmp(format_id, &_ecdsa_quote_uuid, sizeof(oe_uuid_t)))
+    else if (!memcmp(format_id, &_uuid_raw_sgx_quote_ecdsa, sizeof(oe_uuid_t)))
     {
         // evidence_buffer has no header.
-        // It contains a raw SGX ECDSA-p256 quote.
+        // It holds an SGX ECDSA_p256 quote generated by the Intel SGX DCAP
+        // or quote-ex library.
+        sgx_quote_t* quote = (sgx_quote_t*)evidence_buffer;
+
+        if (evidence_buffer_size < sizeof(*quote) + quote->signature_len ||
+            quote->version != SGX_QE3_QUOTE_VERSION ||
+            quote->sign_type != SGX_QL_ALG_ECDSA_P256)
+            OE_RAISE(OE_INVALID_PARAMETER);
 
         format_type = SGX_FORMAT_TYPE_RAW_QUOTE;
     }
@@ -559,42 +740,45 @@ static oe_result_t _verify_evidence(
     // not including the custom claims section.
     if (format_type == SGX_FORMAT_TYPE_LOCAL)
     {
-        oe_report_header_t* report = (oe_report_header_t*)evidence_buffer;
+        report_body = evidence_buffer;
+        report_body_size = sizeof(sgx_report_t);
+        if (evidence_buffer_size > report_body_size)
+        {
+            custom_claims_buffer = report_body + report_body_size;
+            custom_claims_buffer_size = evidence_buffer_size - report_body_size;
+        }
 
-        report_body = report->report;
-        report_body_size = report->report_size;
-        custom_claims = report_body + report_body_size;
-        custom_claims_size =
-            evidence_buffer_size - (sizeof(*report) + report_body_size);
-
-        OE_CHECK(_verify_local_report(
-            evidence_buffer, report->report_size + sizeof(oe_report_header_t)));
+        OE_CHECK(_verify_local_report(report_body, report_body_size));
     }
     else
     {
         if (format_type == SGX_FORMAT_TYPE_REMOTE)
         {
-            oe_report_header_t* report = (oe_report_header_t*)evidence_buffer;
-            report_body = report->report;
-            report_body_size = report->report_size;
-            custom_claims = report_body + report_body_size;
-            custom_claims_size =
-                evidence_buffer_size - (sizeof(*report) + report_body_size);
+            sgx_quote_t* quote = (sgx_quote_t*)evidence_buffer;
+
+            report_body = evidence_buffer;
+            report_body_size = sizeof(*quote) + quote->signature_len;
+            if (evidence_buffer_size > report_body_size)
+            {
+                custom_claims_buffer = report_body + report_body_size;
+                custom_claims_buffer_size =
+                    evidence_buffer_size - report_body_size;
+            }
         }
         else if (format_type == SGX_FORMAT_TYPE_LEGACY_REPORT)
         {
             oe_report_header_t* report = (oe_report_header_t*)evidence_buffer;
             report_body = report->report;
             report_body_size = report->report_size;
-            custom_claims = NULL;
-            custom_claims_size = 0;
+            custom_claims_buffer = NULL;
+            custom_claims_buffer_size = 0;
         }
         else // SGX_FORMAT_TYPE_RAW_QUOTE
         {
             report_body = evidence_buffer;
             report_body_size = evidence_buffer_size;
-            custom_claims = NULL;
-            custom_claims_size = 0;
+            custom_claims_buffer = NULL;
+            custom_claims_buffer_size = 0;
         }
 
         // Get the endorsements if none were provided.
@@ -617,30 +801,42 @@ static oe_result_t _verify_evidence(
 
         // Verify the quote now.
         OE_CHECK(oe_verify_quote_with_sgx_endorsements(
-            report_body, report_body_size, &sgx_endorsements, time));
+            report_body,
+            report_body_size,
+            &sgx_endorsements,
+            time,
+            &valid_from,
+            &valid_until));
     }
 
     // Last step is to return the required and custom claims.
-    OE_CHECK(oe_sgx_extract_claims(
-        format_type,
-        format_id,
-        report_body,
-        report_body_size,
-        custom_claims,
-        custom_claims_size,
-        &sgx_endorsements,
-        claims,
-        claims_length));
-
-    // Avoid running the loop unless traces are actually generated
-    if (oe_get_current_logging_level() >= OE_LOG_LEVEL_INFO)
+    if (claims)
     {
-        OE_TRACE_INFO("extracted %lu claims", *claims_length);
-        for (size_t i = 0; i < *claims_length; i++)
+        OE_CHECK(oe_sgx_extract_claims(
+            format_type,
+            format_id,
+            report_body,
+            report_body_size,
+            custom_claims_buffer,
+            custom_claims_buffer_size,
+            &sgx_endorsements,
+            &valid_from,
+            &valid_until,
+            claims,
+            claims_length));
+
+        // Avoid running the loop unless traces are actually generated
+        if (oe_get_current_logging_level() >= OE_LOG_LEVEL_INFO)
         {
-            OE_TRACE_INFO(
-                "claim %s[%lu]: ", (*claims)[i].name, (*claims)[i].value_size);
-            oe_hex_dump((*claims)[i].value, (*claims)[i].value_size);
+            OE_TRACE_INFO("extracted %lu claims", *claims_length);
+            for (size_t i = 0; i < *claims_length; i++)
+            {
+                OE_TRACE_INFO(
+                    "claim %s[%lu]: ",
+                    (*claims)[i].name,
+                    (*claims)[i].value_size);
+                oe_hex_dump((*claims)[i].value, (*claims)[i].value_size);
+            }
         }
     }
 
@@ -666,7 +862,10 @@ static oe_result_t _get_format_settings(
     if (!context || !settings || !settings_size)
         OE_RAISE(OE_INVALID_PARAMETER);
 
-    if (!memcmp(&context->base.format_id, &_local_uuid, sizeof(oe_uuid_t)))
+    if (!memcmp(
+            &context->base.format_id,
+            &_uuid_sgx_local_attestation,
+            sizeof(oe_uuid_t)))
     {
 #ifdef OE_BUILD_ENCLAVE
         // Enclave-side, SGX local attestation is supported
@@ -700,7 +899,8 @@ static oe_result_t _get_format_settings(
         OE_RAISE(OE_UNSUPPORTED);
 #endif
     }
-    else if (!memcmp(&context->base.format_id, &_ecdsa_uuid, sizeof(oe_uuid_t)))
+    else if (!memcmp(
+                 &context->base.format_id, &_uuid_sgx_ecdsa, sizeof(oe_uuid_t)))
     {
         *settings = NULL;
         *settings_size = 0;
@@ -732,9 +932,12 @@ static oe_result_t _verify_report(
     // Host-side, verifies only ECDSA report
     if (
 #ifdef OE_BUILD_ENCLAVE
-        !memcmp(&context->base.format_id, &_local_uuid, sizeof(oe_uuid_t)) ||
+        !memcmp(
+            &context->base.format_id,
+            &_uuid_sgx_local_attestation,
+            sizeof(oe_uuid_t)) ||
 #endif
-        !memcmp(&context->base.format_id, &_ecdsa_uuid, sizeof(oe_uuid_t)))
+        !memcmp(&context->base.format_id, &_uuid_sgx_ecdsa, sizeof(oe_uuid_t)))
     {
 #ifdef OE_BUILD_ENCLAVE
         OE_CHECK(oe_verify_report_internal(report, report_size, parsed_report));
@@ -762,12 +965,12 @@ static oe_result_t _get_verifier_plugins(
     if (!verifiers || !verifiers_length)
         OE_RAISE(OE_INVALID_PARAMETER);
 
-    uuids[0] = &_ecdsa_uuid;
-    uuids[1] = &_ecdsa_report_uuid;
-    uuids[2] = &_ecdsa_quote_uuid;
+    uuids[0] = &_uuid_sgx_ecdsa;
+    uuids[1] = &_uuid_legacy_report_remote;
+    uuids[2] = &_uuid_raw_sgx_quote_ecdsa;
 
 #ifdef OE_BUILD_ENCLAVE
-    uuids[3] = &_local_uuid;
+    uuids[3] = &_uuid_sgx_local_attestation;
     uuid_count =
         4; // In enclave, local attestation and 3 ECDSA formats are supported.
 #else
@@ -787,9 +990,9 @@ static oe_result_t _get_verifier_plugins(
         plugin->base.on_register = &_on_register;
         plugin->base.on_unregister = &_on_unregister;
         plugin->get_format_settings = &_get_format_settings;
-        plugin->verify_evidence = &_verify_evidence;
+        plugin->verify_evidence = &oe_sgx_verify_evidence;
         plugin->verify_report = &_verify_report;
-        plugin->free_claims = &_free_claims;
+        plugin->free_claims = &oe_sgx_free_claims_list;
     }
     *verifiers_length = uuid_count;
     result = OE_OK;
@@ -806,7 +1009,8 @@ oe_result_t oe_verifier_initialize(void)
 {
     oe_result_t result = OE_UNEXPECTED;
 
-    OE_TEST(oe_mutex_lock(&init_mutex) == 0);
+    if (oe_mutex_lock(&init_mutex))
+        OE_RAISE(OE_UNEXPECTED);
 
     // Do nothing if verifier plugins are already initialized
     if (verifiers)
@@ -838,7 +1042,8 @@ oe_result_t oe_verifier_shutdown(void)
 {
     oe_result_t result = OE_UNEXPECTED;
 
-    OE_TEST(oe_mutex_lock(&init_mutex) == 0);
+    if (oe_mutex_lock(&init_mutex))
+        OE_RAISE(OE_UNEXPECTED);
 
     // Either verifier plugins have not been initialized,
     // or there is no supported plugin

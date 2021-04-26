@@ -52,6 +52,8 @@ int oe_truncate(const char* path, oe_off_t length);
 
 int oe_truncate_d(uint64_t devid, const char* path, oe_off_t length);
 
+int oe_ftruncate(int fd, oe_off_t length);
+
 #endif /* !defined(WIN32) */
 
 int oe_link(const char* oldpath, const char* newpath);
@@ -81,6 +83,9 @@ unsigned int oe_sleep(unsigned int seconds);
 int oe_nanosleep(struct oe_timespec* req, struct oe_timespec* rem);
 
 int oe_flock(int fd, int operation);
+
+int oe_fsync(int fd);
+int oe_fdatasync(int fd);
 
 int oe_dup(int fd);
 

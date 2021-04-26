@@ -15,12 +15,11 @@
 
     <!-- Expose oeedger8r.exe -->
     <PropertyGroup>
-        <OEBinPath>$(MSBuildThisFileDirectory)..\..\tools\win\flc\</OEBinPath>
+        <OEBinPath>$(MSBuildThisFileDirectory)..\..\tools\win\default\</OEBinPath>
         <OEEdger8rPath>$(OEBinPath)oeedger8r.exe</OEEdger8rPath>
         <OELibPath>$(MSBuildThisFileDirectory)..\..\lib\native\</OELibPath>
         <OESignPath>$(OEBinPath)oesign.exe</OESignPath>
         <OEDebugRTPath>$(OEBinPath)oedebugrt.dll</OEDebugRTPath>
-        <SgxDcapQlPath>$(OEBinPath)sgx_dcap_ql.dll</SgxDcapQlPath>
     </PropertyGroup>
 
     <!--
@@ -89,7 +88,7 @@
                 <OEIsSgx>True</OEIsSgx>
                 <OEIsTz>False</OEIsTz>
                 <OEIsSim>False</OEIsSim>
-                <OEPlatformPathSegment>sgx\flc</OEPlatformPathSegment>
+                <OEPlatformPathSegment>sgx\default</OEPlatformPathSegment>
             </PropertyGroup>
         </When>
         <When Condition="('$(Configuration)' == 'Simulation') And ($(OEIsX86) == True Or $(OEIsX64) == True)">
@@ -97,7 +96,7 @@
                 <OEIsSgx>True</OEIsSgx>
                 <OEIsTz>False</OEIsTz>
                 <OEIsSim>True</OEIsSim>
-                <OEPlatformPathSegment>sgx\flc</OEPlatformPathSegment>
+                <OEPlatformPathSegment>sgx\default</OEPlatformPathSegment>
             </PropertyGroup>
         </When>
         <When Condition="('$(Configuration)' == 'Debug' Or '$(Configuration)' == 'Release' Or '$(Configuration)' == 'TZ-OPTEE-Debug') And ($(OEIsARM) == True)">
@@ -123,7 +122,7 @@
                 <OEIsWindows>False</OEIsWindows>
                 <OEIsLinux>True</OEIsLinux>
                 <OEOSPathSegment>linux\xenial</OEOSPathSegment>
-                <OECompilerPathSegment>clang-7</OECompilerPathSegment>
+                <OECompilerPathSegment>clang-8</OECompilerPathSegment>
             </PropertyGroup>
         </When>
         <Otherwise>
@@ -139,8 +138,9 @@
         <When Condition="$(OEIsSgx) == True">
             <PropertyGroup>
                 <OEIncludePath>$(MSBuildThisFileDirectory)$(OEOSPathSegment)\$(OEPlatformPathSegment)\$(OEConfigurationPathSegment)\include</OEIncludePath>
+                <OEPlatformEdlPath>$(OEIncludePath)\openenclave\edl\sgx</OEPlatformEdlPath>
                 <OEHostLibPath>$(OELibPath)$(OEOSPathSegment)\$(OEPlatformPathSegment)\$(OEConfigurationPathSegment)\host\$(OECompilerPathSegment)</OEHostLibPath>
-                <OEEnclaveLibPath>$(OELibPath)$(OEOSPathSegment)\$(OEPlatformPathSegment)\$(OEConfigurationPathSegment)\enclave\clang-7</OEEnclaveLibPath>
+                <OEEnclaveLibPath>$(OELibPath)$(OEOSPathSegment)\$(OEPlatformPathSegment)\$(OEConfigurationPathSegment)\enclave\clang-8</OEEnclaveLibPath>
             </PropertyGroup>
         </When>
     </Choose>
@@ -249,12 +249,12 @@
     <!-- Additional Include Directories for Enclaves and Hosts -->
     <ItemDefinitionGroup Condition="$(OEIsLinux) == False">
         <ClCompile>
-            <AdditionalIncludeDirectories>$(OEIncludePath);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+            <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);$(OEIncludePath)</AdditionalIncludeDirectories>
         </ClCompile>
     </ItemDefinitionGroup>
     <ItemDefinitionGroup Condition="$(OEIsLinux) == True">
         <ClCompile>
-            <AdditionalIncludeDirectories>$(OEIncludePath);/opt/openenclave/include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+            <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);$(OEIncludePath);/opt/openenclave/include</AdditionalIncludeDirectories>
         </ClCompile>
     </ItemDefinitionGroup>
 
@@ -269,8 +269,8 @@
             <PositionIndependentCode>false</PositionIndependentCode>
         </ClCompile>
         <ClCompile Condition="$(OEIsLinux) == False">
-            <AdditionalCPPIncludeDirectories>$(OEIncludePath)\openenclave\3rdparty\libcxx;$(OEIncludePath)\openenclave\3rdparty\libc;$(OEIncludePath)\openenclave\3rdparty;%(AdditionalIncludeDirectories)</AdditionalCPPIncludeDirectories>
-            <AdditionalCIncludeDirectories>$(OEIncludePath)\openenclave\3rdparty\libc;$(OEIncludePath)\openenclave\3rdparty;%(AdditionalIncludeDirectories)</AdditionalCIncludeDirectories>
+            <AdditionalCPPIncludeDirectories>%(AdditionalIncludeDirectories);$(OEIncludePath)\openenclave\3rdparty\libcxx;$(OEIncludePath)\openenclave\3rdparty\libc;$(OEIncludePath)\openenclave\3rdparty</AdditionalCPPIncludeDirectories>
+            <AdditionalCIncludeDirectories>%(AdditionalIncludeDirectories);$(OEIncludePath)\openenclave\3rdparty\libc;$(OEIncludePath)\openenclave\3rdparty</AdditionalCIncludeDirectories>
 
             <AdditionalOptions>-Wpointer-arith -Wextra -Wno-conversion -fpermissive -Wno-missing-field-initializers -fno-strict-aliasing -mxsave -fno-builtin-malloc -fno-builtin-calloc -fno-builtin -mllvm -x86-speculative-load-hardening -m64 -fPIE -nostdinc -fstack-protector-strong -fvisibility=hidden -fno-omit-frame-pointer -ffunction-sections -fdata-sections -ftls-model=local-exec %(AdditionalOptions)</AdditionalOptions>
             <PositionIndependentCode>false</PositionIndependentCode>
@@ -351,13 +351,13 @@
     <!-- Additional Dependencies for Hosts -->
     <ItemDefinitionGroup Condition="'$(OEType)' != 'Enclave' And $(OEIsLinux) == False And $(OEIsSgx) == True">
         <Link>
-            <AdditionalDependencies>oehost.lib;ws2_32.lib;bcrypt.lib;crypt32.lib;synchronization.lib;sgx_enclave_common.lib;sgx_dcap_ql.lib;%(AdditionalDependencies)</AdditionalDependencies>
+            <AdditionalDependencies>oehost.lib;shlwapi.lib;ws2_32.lib;bcrypt.lib;crypt32.lib;synchronization.lib;%(AdditionalDependencies)</AdditionalDependencies>
             <AdditionalLibraryDirectories>$(OEHostLibPath);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
         </Link>
     </ItemDefinitionGroup>
     <ItemDefinitionGroup Condition="'$(OEType)' != 'Enclave' And $(OEIsLinux) == False And $(OEIsSgx) == False">
         <Link>
-            <AdditionalDependencies>oehost.lib;ws2_32.lib;bcrypt.lib;crypt32.lib;synchronization.lib;%(AdditionalDependencies)</AdditionalDependencies>
+            <AdditionalDependencies>oehost.lib;shlwapi.lib;ws2_32.lib;bcrypt.lib;crypt32.lib;synchronization.lib;%(AdditionalDependencies)</AdditionalDependencies>
             <AdditionalLibraryDirectories>$(OEHostLibPath);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
         </Link>
     </ItemDefinitionGroup>
@@ -381,7 +381,7 @@
     <ItemDefinitionGroup Condition="'$(OEType)' != 'Enclave' And $(OEIsLinux) == False">
         <!-- *-SGX-* -->
         <PostBuildEvent Condition="$(OEIsSgx) == True">
-            <Command>copy "$(OEDebugRTPath)" "$(OutDir)" &amp;&amp; copy "$(SgxDcapQlPath)" "$(OutDir)"</Command>
+            <Command>copy "$(OEDebugRTPath)" "$(OutDir)"</Command>
         </PostBuildEvent>
     </ItemDefinitionGroup>
 

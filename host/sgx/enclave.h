@@ -12,6 +12,7 @@
 #include <openenclave/internal/sgxcreate.h>
 #include <openenclave/internal/switchless.h>
 #include <stdbool.h>
+#include "../ecall_ids.h"
 #include "../hostthread.h"
 #include "asmdefs.h"
 
@@ -101,9 +102,6 @@ typedef struct _oe_enclave
     /* Base address of enclave within enclave address space (BASEADDR) */
     uint64_t addr;
 
-    /* Address of .text section (for gdb) */
-    uint64_t text;
-
     /* Size of enclave in bytes */
     uint64_t size;
 
@@ -127,9 +125,15 @@ typedef struct _oe_enclave
 
     /* Meta-data needed by debugrt  */
     oe_debug_enclave_t* debug_enclave;
+    oe_debug_module_t* debug_modules;
 
     /* Manager for switchless calls */
     oe_switchless_call_manager_t* switchless_manager;
+
+    /* Table of global to local ecall ids */
+    oe_ecall_id_t* ecall_id_table;
+    size_t ecall_id_table_size;
+    size_t num_ecalls;
 } oe_enclave_t;
 
 /* Get the event for the given TCS */

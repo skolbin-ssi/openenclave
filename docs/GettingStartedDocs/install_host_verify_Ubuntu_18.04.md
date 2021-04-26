@@ -3,7 +3,6 @@
 ## Platform requirements
 
 - Ubuntu 18.04-LTS 64-bit.
-    - Instructions are also available for [Ubuntu 16.04-LTS 64-bit](/docs/GettingStartedDocs/install_host_verify-Ubuntu_16.04.md).
 
 ### 1. Configure the Intel and Microsoft APT Repositories
 ```bash
@@ -20,7 +19,7 @@ wget -qO - https://packages.microsoft.com/keys/microsoft.asc | sudo apt-key add 
 ### 2. Install the Intel and Open Enclave Host-Verify packages and dependencies
 ```bash
 sudo apt update
-sudo apt -y install clang-7 libssl-dev gdb libprotobuf10 libsgx-dcap-ql libsgx-dcap-ql-dev az-dcap-client open-enclave-hostverify
+sudo apt -y install clang-8 libssl-dev gdb libprotobuf10 libsgx-dcap-ql libsgx-dcap-ql-dev az-dcap-client open-enclave-hostverify
 ```
 
 > This step also installs the [az-dcap-client](https://github.com/microsoft/azure-dcap-client)
@@ -32,7 +31,16 @@ If you wish to use the Ninja build system rather than make, also install
 sudo apt -y install ninja-build
 ```
 
-If you wish to make use of the Open Enclave Host-Verify CMake package, please install CMake and [follow the instructions here](/cmake/sdk_cmake_targets_readme.md).
+If you wish to make use of the Open Enclave Host-Verify CMake package, please install CMake:
+
+```
+sudo apt-get install python-pip
+sudo pip install cmake
+```
+
+and [follow the instructions here](/cmake/sdk_cmake_targets_readme.md).
+
+Open Enclave SDK binary packages can also be [downloaded from GitHub](https://github.com/openenclave/openenclave/releases).
 
 ### 3. Verify the Open Enclave Host-Verify SDK install
 

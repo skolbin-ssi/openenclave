@@ -17,3 +17,20 @@
 	url = https://github.com/llvm-mirror/compiler-rt
 	branch = release_70
 	ignore = all
+[submodule "3rdparty/openssl/openssl"]
+	path = 3rdparty/openssl/openssl
+	url = https://github.com/openssl/openssl
+[submodule "3rdparty/mbedtls/mbedtls"]
+	path = 3rdparty/mbedtls/mbedtls
+	url = https://github.com/openenclave/openenclave-mbedtls.git
+	branch = openenclave-mbedtls-2.16.10
+[submodule "3rdparty/openssl/intel-sgx-ssl"]
+	path = 3rdparty/openssl/intel-sgx-ssl
+	url = https://github.com/intel/intel-sgx-ssl
+[submodule "3rdparty/musl/musl"]
+	path = 3rdparty/musl/musl
+	url = https://github.com/openenclave/openenclave-musl.git
+	branch = openenclave-musl-1.2.2
+[submodule "3rdparty/musl/libc-test"]
+	path = 3rdparty/musl/libc-test
+	url = https://repo.or.cz/libc-test.git

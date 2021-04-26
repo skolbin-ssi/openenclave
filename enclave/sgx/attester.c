@@ -13,18 +13,14 @@
 #include <openenclave/internal/raise.h>
 #include <openenclave/internal/report.h>
 #include <openenclave/internal/sgx/plugin.h>
-#include <openenclave/internal/tests.h>
 #include <openenclave/internal/thread.h>
 #include <openenclave/internal/trace.h>
-
-#include <mbedtls/sha256.h>
 
 #include "../common/attest_plugin.h"
 #include "../common/sgx/endorsements.h"
 #include "../core/sgx/report.h"
 #include "platform_t.h"
 
-#if !defined(OE_USE_BUILTIN_EDL)
 /**
  * Declare the prototype of the following function to avoid the
  * missing-prototypes warning.
@@ -61,16 +57,11 @@ OE_WEAK_ALIAS(
     _oe_get_supported_attester_format_ids_ocall,
     oe_get_supported_attester_format_ids_ocall);
 
-#endif
-
-static const oe_uuid_t _local_uuid = {OE_FORMAT_UUID_SGX_LOCAL_ATTESTATION};
-static const oe_uuid_t _ecdsa_uuid = {OE_FORMAT_UUID_SGX_ECDSA_P256};
-static const oe_uuid_t _ecdsa_report_uuid = {
-    OE_FORMAT_UUID_SGX_ECDSA_P256_REPORT};
-static const oe_uuid_t _ecdsa_quote_uuid = {
-    OE_FORMAT_UUID_SGX_ECDSA_P256_QUOTE};
-static const oe_uuid_t _epid_linkable_uuid = {OE_FORMAT_UUID_SGX_EPID_LINKABLE};
-static const oe_uuid_t _epid_unlinkable_uuid = {
+static const oe_uuid_t _uuid_sgx_local_attestation = {
+    OE_FORMAT_UUID_SGX_LOCAL_ATTESTATION};
+static const oe_uuid_t _uuid_sgx_ecdsa = {OE_FORMAT_UUID_SGX_ECDSA};
+static const oe_uuid_t _uuid_epid_linkable = {OE_FORMAT_UUID_SGX_EPID_LINKABLE};
+static const oe_uuid_t _uuid_epid_unlinkable = {
     OE_FORMAT_UUID_SGX_EPID_UNLINKABLE};
 
 static oe_result_t _on_register(
@@ -95,8 +86,8 @@ static oe_result_t _on_unregister(oe_attestation_role_t* context)
 // Roughtly 0.5 seconds with endorsements.
 static oe_result_t _get_evidence(
     oe_attester_t* context,
-    const void* custom_claims,
-    size_t custom_claims_size,
+    const void* custom_claims_buffer,
+    size_t custom_claims_buffer_size,
     const void* opt_params,
     size_t opt_params_size,
     uint8_t** evidence_buffer,
@@ -113,7 +104,12 @@ static oe_result_t _get_evidence(
     uint8_t* endorsements = NULL;
     size_t endorsements_size = 0;
     sgx_evidence_format_type_t format_type = SGX_FORMAT_TYPE_UNKNOWN;
-    oe_uuid_t* format_id = NULL;
+    const oe_uuid_t* format_id = NULL;
+    // for ECDSA report / quote, oe_get_report_v2_internal() takes
+    // the original &_uuid_sgx_ecdsa. quote_format_id holds the format ID
+    // for this function.
+    const oe_uuid_t* quote_format_id = NULL;
+    bool is_epid_quote = false;
 
     if (!context || !evidence_buffer || !evidence_buffer_size ||
         (endorsements_buffer && !endorsements_buffer_size) ||
@@ -121,9 +117,10 @@ static oe_result_t _get_evidence(
         OE_RAISE(OE_INVALID_PARAMETER);
 
     format_id = &context->base.format_id;
+    quote_format_id = format_id;
 
-    // Set flags based on format UUID, ignore and overwrite the input value
-    if (!memcmp(format_id, &_local_uuid, sizeof(oe_uuid_t)))
+    // Set flags based on format id, ignore and overwrite the input value
+    if (!memcmp(format_id, &_uuid_sgx_local_attestation, sizeof(oe_uuid_t)))
     {
         flags = 0;
         format_type = SGX_FORMAT_TYPE_LOCAL;
@@ -132,15 +129,15 @@ static oe_result_t _get_evidence(
     {
         flags = OE_REPORT_FLAGS_REMOTE_ATTESTATION;
 
-        if (!memcmp(format_id, &_ecdsa_uuid, sizeof(oe_uuid_t)))
+        if (!memcmp(format_id, &_uuid_sgx_ecdsa, sizeof(oe_uuid_t)))
             format_type = SGX_FORMAT_TYPE_REMOTE;
-        else if (!memcmp(format_id, &_ecdsa_report_uuid, sizeof(oe_uuid_t)))
-            format_type = SGX_FORMAT_TYPE_LEGACY_REPORT;
         else if (
-            !memcmp(format_id, &_ecdsa_quote_uuid, sizeof(oe_uuid_t)) ||
-            !memcmp(format_id, &_epid_linkable_uuid, sizeof(oe_uuid_t)) ||
-            !memcmp(format_id, &_epid_unlinkable_uuid, sizeof(oe_uuid_t)))
+            !memcmp(format_id, &_uuid_epid_linkable, sizeof(oe_uuid_t)) ||
+            !memcmp(format_id, &_uuid_epid_unlinkable, sizeof(oe_uuid_t)))
+        {
             format_type = SGX_FORMAT_TYPE_RAW_QUOTE;
+            is_epid_quote = true;
+        }
         else
             OE_RAISE(OE_INVALID_PARAMETER);
     }
@@ -148,19 +145,22 @@ static oe_result_t _get_evidence(
     if (format_type == SGX_FORMAT_TYPE_LOCAL ||
         format_type == SGX_FORMAT_TYPE_REMOTE)
     { // Evidence of these types has its custom claims hashed.
+        oe_report_header_t* header = NULL;
         OE_SHA256 hash;
 
-        // Hash the custom_claims.
+        // Hash the custom_claims_buffer.
         OE_CHECK_MSG(
-            oe_sgx_hash_custom_claims(custom_claims, custom_claims_size, &hash),
-            "SGX Plugin: Failed to hash custom_claims. %s",
+            oe_sgx_hash_custom_claims_buffer(
+                custom_claims_buffer, custom_claims_buffer_size, &hash),
+            "SGX Plugin: Failed to hash custom_claims_buffer. %s",
             oe_result_str(result));
 
-        // Get the report with the hash of the custom_claims as the report data.
+        // Get the report with the hash of the custom_claims_buffer as the
+        // report data.
         OE_CHECK_MSG(
             oe_get_report_v2_internal(
                 flags,
-                format_id,
+                quote_format_id,
                 hash.buf,
                 sizeof(hash.buf),
                 opt_params,
@@ -170,22 +170,25 @@ static oe_result_t _get_evidence(
             "SGX Plugin: Failed to get OE report. %s",
             oe_result_str(result));
 
-        // Combine the report and custom_claims to get the evidence.
-        tmp_buffer_size = report_size + custom_claims_size;
+        // Combine the report body and custom_claims_buffer to get the evidence.
+        // Drop the legacy report header
+        header = (oe_report_header_t*)report;
+        tmp_buffer_size = header->report_size + custom_claims_buffer_size;
         tmp_buffer = (uint8_t*)oe_malloc(tmp_buffer_size);
         if (tmp_buffer == NULL)
             OE_RAISE(OE_OUT_OF_MEMORY);
 
-        // Copy SGX report to evidence
-        memcpy(tmp_buffer, report, report_size);
+        // Copy SGX report body to evidence
+        memcpy(tmp_buffer, header->report, header->report_size);
         // Copy custom claims to evidence
-        memcpy(tmp_buffer + report_size, custom_claims, custom_claims_size);
+        memcpy(
+            tmp_buffer + header->report_size,
+            custom_claims_buffer,
+            custom_claims_buffer_size);
 
         // Get the endorsements from the report if needed.
         if (endorsements_buffer && flags == OE_REPORT_FLAGS_REMOTE_ATTESTATION)
         {
-            oe_report_header_t* header = (oe_report_header_t*)report;
-
             OE_CHECK_MSG(
                 oe_get_sgx_endorsements(
                     header->report,
@@ -196,16 +199,17 @@ static oe_result_t _get_evidence(
                 oe_result_str(result));
         }
     }
-    else // SGX_FORMAT_TYPE_LEGACY_REPORT or _QUOTE
+    else if (format_type == SGX_FORMAT_TYPE_RAW_QUOTE)
     {
-        // Get the report with the custom_claims as the report data.
-        // oe_get_report_v2_internal() takes the original &_ecdsa_uuid
+        oe_report_header_t* header = NULL;
+
+        // Get the report with the custom_claims_buffer as the report data.
         OE_CHECK_MSG(
             oe_get_report_v2_internal(
                 flags,
-                &_ecdsa_uuid,
-                custom_claims,
-                custom_claims_size,
+                quote_format_id,
+                custom_claims_buffer,
+                custom_claims_buffer_size,
                 opt_params,
                 opt_params_size,
                 &report,
@@ -214,7 +218,8 @@ static oe_result_t _get_evidence(
             oe_result_str(result));
 
         // Get the endorsements from the report if needed.
-        if (endorsements_buffer)
+        // No support of endorsements for EPID quotes
+        if (endorsements_buffer && !is_epid_quote)
         {
             oe_report_header_t* header = (oe_report_header_t*)report;
 
@@ -228,22 +233,15 @@ static oe_result_t _get_evidence(
                 oe_result_str(result));
         }
 
-        if (format_type == SGX_FORMAT_TYPE_RAW_QUOTE)
-        { // Discard / overwrite oe_report_header_t header
-            oe_report_header_t* header = (oe_report_header_t*)report;
-            tmp_buffer = report;
-            tmp_buffer_size = header->report_size;
-            memmove(tmp_buffer, header->report, tmp_buffer_size);
-            report = NULL;
-        }
-        else // SGX_FORMAT_TYPE_LEGACY_REPORT
-        {
-            oe_report_header_t* header = (oe_report_header_t*)report;
-            tmp_buffer = report;
-            tmp_buffer_size = sizeof(*header) + header->report_size;
-            report = NULL;
-        }
+        // Discard / overwrite oe_report_header_t structure
+        header = (oe_report_header_t*)report;
+        tmp_buffer = report;
+        tmp_buffer_size = header->report_size;
+        memmove(tmp_buffer, header->report, tmp_buffer_size);
+        report = NULL;
     }
+    else
+        OE_RAISE(OE_UNEXPECTED);
 
     *evidence_buffer = tmp_buffer;
     *evidence_buffer_size = tmp_buffer_size;
@@ -302,10 +300,13 @@ static oe_result_t _get_report(
         OE_RAISE(OE_INVALID_PARAMETER);
 
     // Check to ensure the flags matches the plugin UUID
-    if ((!flags &&
-         !memcmp(&context->base.format_id, &_local_uuid, sizeof(oe_uuid_t))) ||
+    if ((!flags && !memcmp(
+                       &context->base.format_id,
+                       &_uuid_sgx_local_attestation,
+                       sizeof(oe_uuid_t))) ||
         (flags == OE_REPORT_FLAGS_REMOTE_ATTESTATION &&
-         !memcmp(&context->base.format_id, &_ecdsa_uuid, sizeof(oe_uuid_t))))
+         !memcmp(
+             &context->base.format_id, &_uuid_sgx_ecdsa, sizeof(oe_uuid_t))))
     {
         uint8_t* report = NULL;
         size_t report_size = 0;
@@ -346,7 +347,6 @@ static oe_result_t _get_attester_plugins(
     uint8_t* temporary_buffer = NULL;
     oe_uuid_t* uuid_list = NULL;
     size_t uuid_count = 0;
-    size_t legacy_uuid_count = 0; // Count for SGX ECDSA report / quote
 
     if (!attesters || !attesters_length)
         OE_RAISE(OE_INVALID_PARAMETER);
@@ -363,6 +363,7 @@ static oe_result_t _get_attester_plugins(
     // It's possible that there is no supported format
     if (temporary_buffer_size >= sizeof(oe_uuid_t))
     {
+        size_t allocated_buffer_size = temporary_buffer_size;
         // Allocate buffer to held the format IDs
         temporary_buffer = (uint8_t*)oe_malloc(temporary_buffer_size);
         if (temporary_buffer == NULL)
@@ -372,51 +373,38 @@ static oe_result_t _get_attester_plugins(
         result = oe_get_supported_attester_format_ids_ocall(
             (uint32_t*)&retval,
             temporary_buffer,
-            temporary_buffer_size,
+            allocated_buffer_size,
             &temporary_buffer_size);
         OE_CHECK(result);
         OE_CHECK(retval);
+        if (temporary_buffer_size != allocated_buffer_size)
+            OE_RAISE(OE_UNEXPECTED);
     }
 
     uuid_list = (oe_uuid_t*)temporary_buffer;
     uuid_count = temporary_buffer_size / sizeof(oe_uuid_t);
 
-    // If format SGX ECDSA_p256 is supported, then legacy OE report and SGX
-    // quote can also be supported. The two UUIDs for these two legacy formats
-    // are added
-    for (size_t i = 0; i < uuid_count; i++)
-        if (!memcmp(uuid_list + i, &_ecdsa_uuid, sizeof(oe_uuid_t)))
-        {
-            legacy_uuid_count = 2;
-            break;
-        }
-
-    OE_TRACE_INFO("uuid_count=%lu legacy=%lu", uuid_count, legacy_uuid_count);
+    OE_TRACE_INFO("uuid_count=%lu", uuid_count);
 
     // Add one plugin for SGX local attestation
-    *attesters = (oe_attester_t*)oe_malloc(
-        sizeof(oe_attester_t) * (1 + uuid_count + legacy_uuid_count));
+    *attesters =
+        (oe_attester_t*)oe_malloc(sizeof(oe_attester_t) * (1 + uuid_count));
     if (*attesters == NULL)
         OE_RAISE(OE_OUT_OF_MEMORY);
 
-    for (size_t i = 0; i < 1 + uuid_count + legacy_uuid_count; i++)
+    for (size_t i = 0; i < 1 + uuid_count; i++)
     {
         oe_attester_t* plugin = *attesters + i;
         if (i == 0) // First plugin is for SGX local attestation
-            memcpy(&plugin->base.format_id, &_local_uuid, sizeof(oe_uuid_t));
-        else if (i < 1 + uuid_count)
+            memcpy(
+                &plugin->base.format_id,
+                &_uuid_sgx_local_attestation,
+                sizeof(oe_uuid_t));
+        else
             memcpy(
                 &plugin->base.format_id,
                 uuid_list + (i - 1),
                 sizeof(oe_uuid_t));
-        else if (i == 1 + uuid_count)
-            memcpy(
-                &plugin->base.format_id,
-                &_ecdsa_report_uuid,
-                sizeof(oe_uuid_t));
-        else // (i == 1 + uuid_count + 1)
-            memcpy(
-                &plugin->base.format_id, &_ecdsa_quote_uuid, sizeof(oe_uuid_t));
 
         plugin->base.on_register = &_on_register;
         plugin->base.on_unregister = &_on_unregister;
@@ -425,7 +413,7 @@ static oe_result_t _get_attester_plugins(
         plugin->free_endorsements = &_free_endorsements;
         plugin->get_report = &_get_report;
     }
-    *attesters_length = 1 + uuid_count + legacy_uuid_count;
+    *attesters_length = 1 + uuid_count;
 
     result = OE_OK;
 
@@ -453,7 +441,8 @@ oe_result_t oe_attester_initialize(void)
 {
     oe_result_t result = OE_UNEXPECTED;
 
-    OE_TEST(oe_mutex_lock(&mutex) == 0);
+    if (oe_mutex_lock(&mutex))
+        OE_RAISE(OE_UNEXPECTED);
 
     // Do nothing if attester plugins are already initialized
     if (attesters)
@@ -487,7 +476,8 @@ oe_result_t oe_attester_shutdown(void)
 {
     oe_result_t result = OE_UNEXPECTED;
 
-    OE_TEST(oe_mutex_lock(&mutex) == 0);
+    if (oe_mutex_lock(&mutex))
+        OE_RAISE(OE_UNEXPECTED);
 
     // Either attester plugins have not been initialized,
     // or there is no supported plugin

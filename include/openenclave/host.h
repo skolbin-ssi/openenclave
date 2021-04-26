@@ -46,6 +46,7 @@ OE_EXTERNC_BEGIN
 #define _strdup strdup
 #define strncat_s(destination, destination_size, source, source_size) \
     strncat(destination, source, source_size)
+#define fopen_s(pfp, name, mode) *(pfp) = fopen((name), (mode))
 #endif
 
 /**
@@ -61,6 +62,14 @@ OE_EXTERNC_BEGIN
 #define OE_ENCLAVE_FLAG_DEBUG 0x00000001u
 
 /**
+ * Flag passed into oe_create_enclave that allows the host to automatically
+ * decide to run the enclave in debug mode or not based on the Debug value
+ * specified in the enclave configuration file. When both this and
+ * OE_ENCLAVE_FLAG_DEBUG flags are set, OE_ENCLAVE_FLAG_DEBUG takes precedence.
+ */
+#define OE_ENCLAVE_FLAG_DEBUG_AUTO 0x000000010u
+
+/**
  *  Flag passed into oe_create_enclave to run the enclave in simulation mode.
  */
 #define OE_ENCLAVE_FLAG_SIMULATE 0x00000002u
@@ -68,8 +77,16 @@ OE_EXTERNC_BEGIN
 /**
  * @cond DEV
  */
-#define OE_ENCLAVE_FLAG_RESERVED \
-    (~(OE_ENCLAVE_FLAG_DEBUG | OE_ENCLAVE_FLAG_SIMULATE))
+
+/**
+ *  Flag reserved for internal use to indicate the enclave was configured to run
+ * in kss mode
+ */
+#define OE_ENCLAVE_FLAG_SGX_KSS 0x00000004u
+
+#define OE_ENCLAVE_FLAG_RESERVED                            \
+    (~(OE_ENCLAVE_FLAG_DEBUG | OE_ENCLAVE_FLAG_DEBUG_AUTO | \
+       OE_ENCLAVE_FLAG_SIMULATE))
 
 /**
  * @endcond
@@ -94,6 +111,7 @@ typedef enum _oe_enclave_setting_type
 #ifdef OE_WITH_EXPERIMENTAL_EEID
     OE_EXTENDED_ENCLAVE_INITIALIZATION_DATA = 0x976a8f66,
 #endif
+    OE_SGX_ENCLAVE_CONFIG_DATA = 0x78b5b41d
 } oe_enclave_setting_type_t;
 
 /**
@@ -115,6 +133,16 @@ typedef struct _oe_enclave_setting_context_switchless
 } oe_enclave_setting_context_switchless_t;
 
 /**
+ * The setting for config_id/config_svn on Ice Lake platform.
+ */
+typedef struct _oe_sgx_enclave_setting_config_data
+{
+    uint8_t config_id[64];
+    uint16_t config_svn;
+    bool ignore_if_unsupported;
+} oe_sgx_enclave_setting_config_data;
+
+/**
  * The uniform structure type containing a specific type of enclave
  * setting.
  */
@@ -134,9 +162,18 @@ typedef struct _oe_enclave_setting
 #ifdef OE_WITH_EXPERIMENTAL_EEID
         oe_eeid_t* eeid;
 #endif
+        const oe_sgx_enclave_setting_config_data* config_data;
         /* Add new setting types here. */
     } u;
 } oe_enclave_setting_t;
+
+/**
+ * Structure describing an ecall.
+ */
+typedef struct _oe_ecall_info_t
+{
+    const char* name;
+} oe_ecall_info_t;
 
 /**
  * Create an enclave from an enclave image file.
@@ -167,6 +204,10 @@ typedef struct _oe_enclave_setting
  *
  * @param[in] ocall_count The number of functions in the **ocall_table**.
  *
+ * @param[in] ecall_name_table Table of ecall names.
+ *
+ * @param[i] ecall_count Number of ecalls.
+ *
  * @param[out] enclave This points to the enclave instance upon success.
  *
  * @returns Returns OE_OK on success.
@@ -180,6 +221,8 @@ oe_result_t oe_create_enclave(
     uint32_t setting_count,
     const oe_ocall_func_t* ocall_table,
     uint32_t ocall_count,
+    const oe_ecall_info_t* ecall_name_table,
+    uint32_t ecall_count,
     oe_enclave_t** enclave);
 
 /**

@@ -11,26 +11,15 @@
 set(OE_INCLUDE_DIR ${PROJECT_SOURCE_DIR}/include)
 set(EDL_DIR ${PROJECT_SOURCE_DIR}/include/openenclave/edl)
 set(EDL_FILE ${EDL_DIR}/syscall.edl)
-if (COMPILE_SYSTEM_EDL)
-  add_custom_command(
-    OUTPUT syscall_t.h syscall_t.c syscall_args.h
-    DEPENDS ${EDL_FILE} edger8r
-    COMMAND edger8r --search-path ${OE_INCLUDE_DIR} --trusted ${EDL_FILE})
 
-  add_custom_target(syscall_trusted_edl DEPENDS syscall_t.h syscall_t.c
-                                                syscall_args.h)
+# Generate headers only
+add_custom_command(
+  OUTPUT syscall_t.h syscall_args.h
+  DEPENDS ${EDL_FILE} edger8r
+  COMMAND edger8r --header-only --search-path ${OE_INCLUDE_DIR} --trusted
+          ${EDL_FILE})
 
-  list(APPEND SOURCES syscall_t_wrapper.c)
-else ()
-  # Generate headers only
-  add_custom_command(
-    OUTPUT syscall_t.h syscall_args.h
-    DEPENDS ${EDL_FILE} edger8r
-    COMMAND edger8r --header-only --search-path ${OE_INCLUDE_DIR} --trusted
-            ${EDL_FILE})
-
-  add_custom_target(syscall_trusted_edl DEPENDS syscall_t.h syscall_args.h)
-endif ()
+add_custom_target(syscall_trusted_edl DEPENDS syscall_t.h syscall_args.h)
 
 ##==============================================================================
 ##
@@ -69,16 +58,16 @@ enclave_enable_code_coverage(oesyscall)
 
 add_enclave_dependencies(oesyscall syscall_trusted_edl)
 
+# Depend on oelibc in order to include bits/syscall.h which contains MUSL definitions of syscall enums.
+# Syscall infrastructure will assert that MUSL enums (e.g SYS_open) match the corresponding OE enums (e.g OE_SYS_open).
+enclave_link_libraries(oesyscall PRIVATE oelibc_includes)
+
 enclave_include_directories(
   oesyscall PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR}
   ${PROJECT_SOURCE_DIR}/include/openenclave/corelibc)
 
 enclave_link_libraries(oesyscall PUBLIC oecore)
 enclave_compile_options(oesyscall PRIVATE -ffunction-sections)
-
-if (COMPILE_SYSTEM_EDL)
-  enclave_compile_definitions(oesyscall PRIVATE OE_USE_BUILTIN_EDL)
-endif ()
 
 set_source_files_properties(${CMAKE_CURRENT_BINARY_DIR}/syscall_t.c
                             PROPERTIES COMPILE_FLAGS -DOE_NEED_STDC_NAMES)

@@ -7,7 +7,7 @@
 - Check if your system has support for SGX1 with or without FLC, please look [here](./SGXSupportLevel.md)
     - If your system does not support SGX1+FLC, simulation mode can be used.
 
-- Windows Server 2016 or 2019, or Windows 10 (1709 or newer)
+- Windows Server 2019 or Windows 10 (1709 or newer)
 
 ## Software Prerequisites
 
@@ -43,8 +43,8 @@ C:\Program Files\Git\mingw64\bin\openssl.exe
 
 ### Clang
 
-Download [Clang/LLVM for Windows 64-bit](http://releases.llvm.org/7.0.1/LLVM-7.0.1-win64.exe).
-Install Clang 7.0.1 and add the LLVM folder (typically C:\Program Files\LLVM\bin)
+Download [Clang/LLVM for Windows 64-bit](https://github.com/llvm/llvm-project/releases/download/llvmorg-8.0.1/LLVM-8.0.1-win64.exe).
+Install Clang 8.0.1 and add the LLVM folder (typically C:\Program Files\LLVM\bin)
 to PATH. Open Enclave SDK uses clang to build the enclave binaries.
 
 Open up a command prompt and ensure that clang is added to PATH.

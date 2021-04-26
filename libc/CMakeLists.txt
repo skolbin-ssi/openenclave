@@ -17,9 +17,6 @@ if (OE_SGX)
     ${MUSLSRC}/math/x86_64/log2l.s
     ${MUSLSRC}/math/x86_64/logl.s
     #${MUSLSRC}/math/x86_64/exp2l.s
-    ${MUSLSRC}/math/x86_64/sqrt.s
-    ${MUSLSRC}/math/x86_64/sqrtl.s
-    ${MUSLSRC}/math/x86_64/sqrtf.s
     ${MUSLSRC}/setjmp/x86_64/longjmp.s
     ${MUSLSRC}/setjmp/x86_64/setjmp.s
     ${MUSLSRC}/string/x86_64/memcpy.s
@@ -39,7 +36,7 @@ endif ()
 maybe_build_using_clangw(oelibasm)
 
 # CMake unconditionally adds `-DNDEBUG` etc. as flags even when
-# assembling, and clang-7 errors because we treat warnings as errors.
+# assembling, and clang errors because we treat warnings as errors.
 # So we move the assembly code into a fake library, turn off the
 # error, and then inject the objects into the actual library.
 if (CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR USE_CLANGW)
@@ -50,9 +47,12 @@ endif ()
 set(PLATFORM_SRC "")
 
 if (OE_SGX)
-  list(APPEND PLATFORM_SRC sgx/arc4random.c)
+  list(APPEND PLATFORM_SRC sgx/arc4random.c ${MUSLSRC}/math/x86_64/sqrt.c
+       ${MUSLSRC}/math/x86_64/sqrtl.c ${MUSLSRC}/math/x86_64/sqrtf.c)
 else ()
-  list(APPEND PLATFORM_SRC
+  list(
+    APPEND
+    PLATFORM_SRC
     ${MUSLSRC}/math/exp2l.c
     ${MUSLSRC}/string/memcpy.c
     ${MUSLSRC}/string/memmove.c
@@ -213,6 +213,7 @@ add_enclave_library(
   ${MUSLSRC}/internal/floatscan.c
   ${MUSLSRC}/internal/intscan.c
   ${MUSLSRC}/internal/libc.c
+  ${MUSLSRC}/internal/procfdname.c
   ${MUSLSRC}/internal/shgetc.c
   ${MUSLSRC}/legacy/getpagesize.c
   ${MUSLSRC}/locale/bind_textdomain_codeset.c
@@ -235,9 +236,20 @@ add_enclave_library(
   ${MUSLSRC}/locale/textdomain.c
   ${MUSLSRC}/locale/wcscoll.c
   ${MUSLSRC}/locale/wcsxfrm.c
+  ${MUSLSRC}/linux/getrandom.c
   ${MUSLSRC}/linux/mount.c
   ${MUSLSRC}/linux/epoll.c
   ${MUSLSRC}/linux/flock.c
+  ${MUSLSRC}/math/__math_divzero.c
+  ${MUSLSRC}/math/__math_divzerof.c
+  ${MUSLSRC}/math/__math_invalid.c
+  ${MUSLSRC}/math/__math_invalidf.c
+  ${MUSLSRC}/math/__math_oflow.c
+  ${MUSLSRC}/math/__math_oflowf.c
+  ${MUSLSRC}/math/__math_uflow.c
+  ${MUSLSRC}/math/__math_uflowf.c
+  ${MUSLSRC}/math/__math_xflow.c
+  ${MUSLSRC}/math/__math_xflowf.c
   ${MUSLSRC}/math/acos.c
   ${MUSLSRC}/math/acosf.c
   ${MUSLSRC}/math/acosh.c
@@ -278,11 +290,13 @@ add_enclave_library(
   ${MUSLSRC}/math/erf.c
   ${MUSLSRC}/math/erff.c
   ${MUSLSRC}/math/erfl.c
+  ${MUSLSRC}/math/exp_data.c
   ${MUSLSRC}/math/exp10.c
   ${MUSLSRC}/math/exp10f.c
   ${MUSLSRC}/math/exp10l.c
   ${MUSLSRC}/math/exp2.c
   ${MUSLSRC}/math/exp2f.c
+  ${MUSLSRC}/math/exp2f_data.c
   ${MUSLSRC}/math/exp.c
   ${MUSLSRC}/math/expf.c
   ${MUSLSRC}/math/expl.c
@@ -354,13 +368,17 @@ add_enclave_library(
   ${MUSLSRC}/math/log1pf.c
   #${MUSLSRC}/math/log1pl.c
   ${MUSLSRC}/math/log2.c
+  ${MUSLSRC}/math/log2_data.c
   ${MUSLSRC}/math/log2f.c
+  ${MUSLSRC}/math/log2f_data.c
   #${MUSLSRC}/math/log2l.c
   ${MUSLSRC}/math/logb.c
   ${MUSLSRC}/math/logbf.c
   ${MUSLSRC}/math/logbl.c
   ${MUSLSRC}/math/log.c
+  ${MUSLSRC}/math/log_data.c
   ${MUSLSRC}/math/logf.c
+  ${MUSLSRC}/math/logf_data.c
   #${MUSLSRC}/math/logl.c
   ${MUSLSRC}/math/lrint.c
   ${MUSLSRC}/math/lrintf.c
@@ -385,7 +403,9 @@ add_enclave_library(
   ${MUSLSRC}/math/nexttowardl.c
   ${MUSLSRC}/math/__polevll.c
   ${MUSLSRC}/math/pow.c
+  ${MUSLSRC}/math/pow_data.c
   ${MUSLSRC}/math/powf.c
+  ${MUSLSRC}/math/powf_data.c
   ${MUSLSRC}/math/powl.c
   ${MUSLSRC}/math/remainder.c
   ${MUSLSRC}/math/remainderf.c
@@ -545,6 +565,8 @@ add_enclave_library(
   ${MUSLSRC}/search/tfind.c
   ${MUSLSRC}/search/tsearch.c
   ${MUSLSRC}/search/twalk.c
+  ${MUSLSRC}/stat/fstat.c
+  ${MUSLSRC}/stat/fstatat.c
   ${MUSLSRC}/stat/stat.c
   ${MUSLSRC}/stdio/asprintf.c
   ${MUSLSRC}/stdio/asprintf.c
@@ -636,7 +658,6 @@ add_enclave_library(
   ${MUSLSRC}/stdio/__stdio_write.c
   ${MUSLSRC}/stdio/stdout.c
   ${MUSLSRC}/stdio/__stdout_write.c
-  ${MUSLSRC}/stdio/__string_read.c
   ${MUSLSRC}/stdio/swprintf.c
   ${MUSLSRC}/stdio/swscanf.c
   ${MUSLSRC}/stdio/__toread.c
@@ -758,6 +779,8 @@ add_enclave_library(
   ${MUSLSRC}/thread/__lock.c
   ${MUSLSRC}/thread/__wait.c
   ${MUSLSRC}/time/clock_gettime.c
+  ${MUSLSRC}/time/clock_nanosleep.c
+  ${MUSLSRC}/time/difftime.c
   ${MUSLSRC}/time/gettimeofday.c
   ${MUSLSRC}/time/gmtime.c
   ${MUSLSRC}/time/gmtime_r.c
@@ -775,6 +798,9 @@ add_enclave_library(
   ${MUSLSRC}/unistd/access.c
   ${MUSLSRC}/unistd/chdir.c
   ${MUSLSRC}/unistd/close.c
+  ${MUSLSRC}/unistd/fdatasync.c
+  ${MUSLSRC}/unistd/fsync.c
+  ${MUSLSRC}/unistd/ftruncate.c
   ${MUSLSRC}/unistd/getgid.c
   ${MUSLSRC}/unistd/getegid.c
   ${MUSLSRC}/unistd/getuid.c
@@ -800,6 +826,7 @@ add_enclave_library(
   ${MUSLSRC}/unistd/unlink.c
   ${MUSLSRC}/unistd/write.c
   ${MUSLSRC}/unistd/writev.c
+  ${MUSLSRC}/unistd/usleep.c
   ${PLATFORM_SRC})
 
 maybe_build_using_clangw(oelibc)
@@ -859,9 +886,11 @@ elseif (CMAKE_C_COMPILER_ID MATCHES Clang OR USE_CLANGW)
 endif ()
 
 # Disable optimizations for twalk.c to avoid Clang 8 compiler bug, see #2556
-if (CMAKE_C_COMPILER_ID MATCHES Clang
-    AND CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL 8
-    AND CMAKE_C_COMPILER_VERSION VERSION_LESS 9.0)
+# Always dose this on Windows as we cannot know the version of clang.
+if (WIN32
+    OR (CMAKE_C_COMPILER_ID MATCHES Clang
+        AND CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL 8
+        AND CMAKE_C_COMPILER_VERSION VERSION_LESS 9.0))
   set_source_files_properties(${MUSLSRC}/search/twalk.c PROPERTIES COMPILE_FLAGS
                                                                    -O0)
 endif ()

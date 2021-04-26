@@ -12,24 +12,13 @@ set(EDL_DIR ${PROJECT_SOURCE_DIR}/include/openenclave/edl)
 ##==============================================================================
 
 set(CORE_EDL_FILE ${EDL_DIR}/core.edl)
-if (COMPILE_SYSTEM_EDL)
-  add_custom_command(
-    OUTPUT core_t.h core_t.c core_args.h
-    DEPENDS ${CORE_EDL_FILE} edger8r
-    COMMAND edger8r --search-path ${OE_INCLUDE_DIR} --trusted ${CORE_EDL_FILE})
+add_custom_command(
+  OUTPUT core_t.h core_args.h
+  DEPENDS ${CORE_EDL_FILE} edger8r
+  COMMAND edger8r --header-only --search-path ${OE_INCLUDE_DIR} --trusted
+          ${CORE_EDL_FILE})
 
-  add_custom_target(core_trusted_edl DEPENDS core_t.h core_t.c core_args.h)
-
-  list(APPEND PLATFORM_SRC core_t_wrapper.c)
-else ()
-  add_custom_command(
-    OUTPUT core_t.h core_args.h
-    DEPENDS ${CORE_EDL_FILE} edger8r
-    COMMAND edger8r --header-only --search-path ${OE_INCLUDE_DIR} --trusted
-            ${CORE_EDL_FILE})
-
-  add_custom_target(core_trusted_edl DEPENDS core_t.h core_args.h)
-endif ()
+add_custom_target(core_trusted_edl DEPENDS core_t.h core_args.h)
 
 ##==============================================================================
 ##
@@ -39,17 +28,7 @@ endif ()
 ##==============================================================================
 
 set(SGX_EDL_FILE ${EDL_DIR}/sgx/platform.edl)
-if (OE_SGX AND COMPILE_SYSTEM_EDL)
-  add_custom_command(
-    OUTPUT platform_t.h platform_t.c platform_args.h
-    DEPENDS ${SGX_EDL_FILE} edger8r
-    COMMAND edger8r --search-path ${OE_INCLUDE_DIR} --trusted ${SGX_EDL_FILE})
-
-  add_custom_target(platform_trusted_edl DEPENDS platform_t.h platform_t.c
-                                                 platform_args.h)
-
-  list(APPEND PLATFORM_SRC sgx/platform_t_wrapper.c)
-elseif (OE_SGX)
+if (OE_SGX)
   # Only generate headers
   add_custom_command(
     OUTPUT platform_t.h platform_args.h
@@ -77,6 +56,7 @@ if (OE_SGX)
     ${MUSL_SRC_DIR}/string/x86_64/memset.s
     ../../common/sgx/endorsements.c
     ../../common/sgx/rand.S
+    ../../common/sgx/cpuid.c
     sgx/arena.c
     sgx/asmdefs.c
     sgx/backtrace.c
@@ -106,7 +86,8 @@ if (OE_SGX)
     sgx/td_basic.c
     sgx/thread.c
     sgx/threadlocal.c
-    sgx/tracee.c)
+    sgx/tracee.c
+    sgx/xstate.c)
 
   # Functions in td_basic.c will change the status of td and may trigger
   # stack check fail, thus it is necessary to turn off stack check.
@@ -164,9 +145,9 @@ if (OE_TRUSTZONE OR (OE_SGX AND (UNIX OR USE_CLANGW)))
 endif ()
 
 if (USE_SNMALLOC)
-  set(DEFAULT_ALLOCATOR oesnmalloc_obj)
+  set(DEFAULT_ALLOCATOR_LIB oesnmalloc_obj)
 else ()
-  set(DEFAULT_ALLOCATOR oedlmalloc)
+  set(DEFAULT_ALLOCATOR_LIB oedlmalloc_obj)
 endif ()
 
 add_enclave_library(
@@ -180,9 +161,8 @@ add_enclave_library(
   assert.c
   atexit.c
   backtrace.c
-  calls.c
   ctype.c
-  debugmalloc.c
+  gmtime.c
   hexdump.c
   hostcalls.c
   intstr.c
@@ -192,6 +172,7 @@ add_enclave_library(
   pthread.c
   random.c
   result.c
+  seal.c
   stdio.c
   strerror.c
   string.c
@@ -200,7 +181,6 @@ add_enclave_library(
   time.c
   tracee.c
   wchar.c
-  $<TARGET_OBJECTS:${DEFAULT_ALLOCATOR}>
   ${PLATFORM_SRC})
 
 # Some files in oecore come directly from the musl source. For these files,
@@ -209,17 +189,23 @@ add_enclave_library(
 set(CORELIBC_INCLUDES ${PROJECT_SOURCE_DIR}/include/openenclave/corelibc)
 
 list(APPEND NEEDS_STDC_NAMES ${MUSL_SRC_DIR}/prng/rand.c
-     ${MUSL_SRC_DIR}/string/memcmp.c debugmalloc.c strtok_r.c)
+     ${MUSL_SRC_DIR}/string/memcmp.c strtok_r.c)
 
 list(APPEND W_NO_CONVERSION ${MUSL_SRC_DIR}/prng/rand.c)
 
-set_property(SOURCE ${W_NO_CONVERSION} APPEND_STRING PROPERTY COMPILE_FLAGS
-                                                              "-Wno-conversion")
+set_property(
+  SOURCE ${W_NO_CONVERSION}
+  APPEND_STRING
+  PROPERTY COMPILE_FLAGS "-Wno-conversion")
 
-set_property(SOURCE ${NEEDS_STDC_NAMES} APPEND_STRING
-             PROPERTY COMPILE_FLAGS " -I${CORELIBC_INCLUDES}")
-set_property(SOURCE ${NEEDS_STDC_NAMES} APPEND PROPERTY COMPILE_DEFINITIONS
-                                                        OE_NEED_STDC_NAMES)
+set_property(
+  SOURCE ${NEEDS_STDC_NAMES}
+  APPEND_STRING
+  PROPERTY COMPILE_FLAGS " -I${CORELIBC_INCLUDES}")
+set_property(
+  SOURCE ${NEEDS_STDC_NAMES}
+  APPEND
+  PROPERTY COMPILE_DEFINITIONS OE_NEED_STDC_NAMES)
 
 maybe_build_using_clangw(oecore)
 
@@ -241,7 +227,7 @@ if (OE_TRUSTZONE)
     oecore PRIVATE ${PROJECT_SOURCE_DIR}/include/openenclave/corelibc)
 endif ()
 
-enclave_link_libraries(oecore PUBLIC oe_includes)
+enclave_link_libraries(oecore PUBLIC oe_includes ${DEFAULT_ALLOCATOR_LIB})
 
 if (CMAKE_C_COMPILER_ID MATCHES GNU)
   enclave_compile_options(oecore PRIVATE -Wjump-misses-init)
@@ -320,16 +306,6 @@ enclave_compile_definitions(
   # package.
   $<BUILD_INTERFACE:OE_API_VERSION=2>)
 
-if (USE_DEBUG_MALLOC)
-  enclave_compile_definitions(oecore PRIVATE OE_USE_DEBUG_MALLOC)
-  message(
-    "USE_DEBUG_MALLOC is set, building oecore with memory leak detection.")
-endif ()
-
-if (COMPILE_SYSTEM_EDL)
-  enclave_compile_definitions(oecore PRIVATE OE_USE_BUILTIN_EDL)
-endif ()
-
 if (WITH_EEID)
   enclave_compile_definitions(oecore PRIVATE OE_WITH_EXPERIMENTAL_EEID)
 endif ()
@@ -365,6 +341,32 @@ set_enclave_property(TARGET oecore PROPERTY ARCHIVE_OUTPUT_DIRECTORY
 install_enclaves(
   TARGETS
   oecore
+  EXPORT
+  openenclave-targets
+  ARCHIVE
+  DESTINATION
+  ${CMAKE_INSTALL_LIBDIR}/openenclave/enclave)
+
+add_enclave_library(oedebugmalloc STATIC debugmalloc.c)
+
+enclave_compile_definitions(oedebugmalloc PUBLIC OE_USE_DEBUG_MALLOC)
+
+enclave_link_libraries(oedebugmalloc oecore)
+
+set_enclave_property(TARGET oedebugmalloc PROPERTY ARCHIVE_OUTPUT_DIRECTORY
+                     ${OE_LIBDIR}/openenclave/enclave)
+
+if (OE_TRUSTZONE)
+  # dependent header 3rdparty/optee/libutee/liboeutee/user_ta_header.h
+  # includes inttypes.h. As a result oedebugmalloc needs the corelibc headers
+  # in its include path.
+  enclave_include_directories(
+    oedebugmalloc PRIVATE ${PROJECT_SOURCE_DIR}/include/openenclave/corelibc)
+endif ()
+
+install_enclaves(
+  TARGETS
+  oedebugmalloc
   EXPORT
   openenclave-targets
   ARCHIVE

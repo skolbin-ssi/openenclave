@@ -13,11 +13,17 @@ install(
   DIRECTORY openenclave/bits
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/openenclave/
   COMPONENT OEHOSTVERIFY)
+install(FILES openenclave/debugmalloc.h
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/openenclave/)
 install(DIRECTORY openenclave/edger8r
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/openenclave/)
 install(FILES openenclave/enclave.h
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/openenclave/)
 install(FILES openenclave/host.h
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/openenclave/)
+install(FILES openenclave/log.h
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/openenclave/)
+install(FILES openenclave/trace.h
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/openenclave/)
 install(
   FILES openenclave/host_verify.h
@@ -32,13 +38,23 @@ install(
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/openenclave/attestation/sgx)
 install(
   FILES openenclave/attestation/verifier.h
+        openenclave/attestation/custom_claims.h
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/openenclave/attestation/
   COMPONENT OEHOSTVERIFY)
 install(
   FILES openenclave/attestation/sgx/report.h
+        openenclave/attestation/sgx/evidence.h
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/openenclave/attestation/sgx/
   COMPONENT OEHOSTVERIFY)
 install(TARGETS oe_includes EXPORT openenclave-targets)
+install(
+  TARGETS oe_includes
+  EXPORT openenclave-hostverify-targets
+  COMPONENT OEHOSTVERIFY)
+install(FILES openenclave/seal.h
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/openenclave)
+install(DIRECTORY openenclave/sgx
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/openenclave)
 
 # Install parts of oelibc needed by edger8r-generated code
 list(
@@ -58,6 +74,10 @@ install(FILES openenclave/corelibc/bits/types.h
 
 # Install pluggable allocator header.
 install(FILES openenclave/advanced/allocator.h
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/openenclave/advanced)
+
+# Install allocator info header.
+install(FILES openenclave/advanced/mallinfo.h
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/openenclave/advanced)
 
 ##==============================================================================

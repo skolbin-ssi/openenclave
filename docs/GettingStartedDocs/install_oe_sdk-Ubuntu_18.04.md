@@ -3,7 +3,6 @@
 ## Platform requirements
 
 - Ubuntu 18.04-LTS 64-bit.
-    - Instructions are also available for [Ubuntu 16.04-LTS 64-bit](/docs/GettingStartedDocs/install_oe_sdk-Ubuntu_16.04.md).
 - SGX1-capable system with support for Flexible Launch Control (FLC).
     - You can acquire a VM with the required features from [Azure Confidential Compute](https://azure.microsoft.com/en-us/solutions/confidential-compute/).
     - If you are setting up your own device, [check if your existing device supports SGX with FLC](/docs/GettingStartedDocs/Contributors/building_oe_sdk.md#1-determine-the-sgx-support-level-on-your-developmenttarget-system).
@@ -20,6 +19,8 @@ wget -qO - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
 
 echo "deb [arch=amd64] https://packages.microsoft.com/ubuntu/18.04/prod bionic main" | sudo tee /etc/apt/sources.list.d/msprod.list
 wget -qO - https://packages.microsoft.com/keys/microsoft.asc | sudo apt-key add -
+
+sudo apt update
 ```
 
 ### 2. Install the Intel SGX DCAP Driver
@@ -47,7 +48,7 @@ sudo ./sgx_linux_x64_driver.bin
 
 ### 3. Install the Intel and Open Enclave packages and dependencies
 ```bash
-sudo apt -y install clang-7 libssl-dev gdb libsgx-enclave-common libsgx-enclave-common-dev libprotobuf10 libsgx-dcap-ql libsgx-dcap-ql-dev az-dcap-client open-enclave
+sudo apt -y install clang-8 libssl-dev gdb libsgx-enclave-common libsgx-quote-ex libprotobuf10 libsgx-dcap-ql libsgx-dcap-ql-dev az-dcap-client open-enclave
 ```
 
 > This step also installs the [az-dcap-client](https://github.com/microsoft/azure-dcap-client)
@@ -59,8 +60,23 @@ If you wish to use the Ninja build system rather than make, also install
 sudo apt -y install ninja-build
 ```
 
-If you wish to make use of the Open Enclave CMake package, please install CMake and [follow the instructions here](/cmake/sdk_cmake_targets_readme.md).
+If you wish to make use of the Open Enclave CMake package, please install CMake:
+
+```
+sudo apt-get install python-pip
+sudo pip install cmake
+```
+
+and [follow the instructions here](/cmake/sdk_cmake_targets_readme.md).
+
+Open Enclave SDK binary packages can also be [downloaded from GitHub](https://github.com/openenclave/openenclave/releases).
 
 ### 4. Verify the Open Enclave SDK install
 
 See [Using the Open Enclave SDK](Linux_using_oe_sdk.md) for verifying and using the installed SDK.
+
+### 5. Determine call path for SGX quote generation in attestation sample
+
+In the attestation sample, you can either take the in-process call path or out-of-process call path to generate evidence of format `OE_FORMAT_UUID_SGX_ECDSA`. Please refer to the following README file for more information:
+
+ - [The Attestation Sample](/samples/attestation/README.md#determining-call-path-for-sgx-quote-generation)

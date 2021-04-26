@@ -24,11 +24,14 @@ void enc_edl_opt_out()
     OE_TEST(oe_syscall_write_ocall(NULL, 0, NULL, 0) == OE_UNSUPPORTED);
     OE_TEST(oe_syscall_pread_ocall(NULL, 0, NULL, 0, 0) == OE_UNSUPPORTED);
     OE_TEST(oe_syscall_pwrite_ocall(NULL, 0, NULL, 0, 0) == OE_UNSUPPORTED);
+    OE_TEST(oe_syscall_fsync_ocall(NULL, 0) == OE_UNSUPPORTED);
+    OE_TEST(oe_syscall_fdatasync_ocall(NULL, 0) == OE_UNSUPPORTED);
     OE_TEST(oe_syscall_opendir_ocall(NULL, NULL) == OE_UNSUPPORTED);
     OE_TEST(oe_syscall_readdir_ocall(NULL, 0, NULL) == OE_UNSUPPORTED);
     OE_TEST(oe_syscall_rewinddir_ocall(0) == OE_UNSUPPORTED);
     OE_TEST(oe_syscall_closedir_ocall(NULL, 0) == OE_UNSUPPORTED);
     OE_TEST(oe_syscall_stat_ocall(NULL, NULL, NULL) == OE_UNSUPPORTED);
+    OE_TEST(oe_syscall_fstat_ocall(NULL, 0, NULL) == OE_UNSUPPORTED);
     OE_TEST(oe_syscall_access_ocall(NULL, NULL, 0) == OE_UNSUPPORTED);
     OE_TEST(oe_syscall_link_ocall(NULL, NULL, NULL) == OE_UNSUPPORTED);
     OE_TEST(oe_syscall_unlink_ocall(NULL, NULL) == OE_UNSUPPORTED);
@@ -138,6 +141,7 @@ void enc_edl_opt_out()
             oe_get_quote_verification_collateral_ocall(
                 &result,
                 NULL,
+                0,
                 NULL,
                 0,
                 NULL,

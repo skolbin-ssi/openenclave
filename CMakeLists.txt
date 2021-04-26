@@ -30,12 +30,6 @@ elseif (WIN32)
   set(OE_ASM ASM_MASM)
 endif ()
 
-# Set compiler search order to prefer Clang
-# This has to be done before `project`
-# http://cmake.3232098.n2.nabble.com/Prefer-clang-over-gcc-td7597742.html
-set(CMAKE_C_COMPILER_NAMES clang-7 cc)
-set(CMAKE_CXX_COMPILER_NAMES clang++-7 c++)
-
 # Will be overwritten during the cmake initialization.
 set(LVI_MITIGATION
     "None"
@@ -43,14 +37,28 @@ set(LVI_MITIGATION
 set(LVI_MITIGATION_BINDIR
     "None"
     CACHE STRING "Path to the LVI mitigation bindir.")
-# On Unix, configuring cmake to adopt the customized compilation toolchain for LVI mitigation.
-# Note that this has be done before `project`.
-if (UNIX AND LVI_MITIGATION MATCHES ControlFlow)
-  if (${LVI_MITIGATION_BINDIR} MATCHES None)
-    message(FATAL_ERROR "LVI_MITIGATION_BINDIR is not specified.")
+
+# On Unix, configuring cmake to use the preferred compiler.
+# Note that this must be done before the `project` command.
+if (UNIX)
+  if (LVI_MITIGATION MATCHES ControlFlow)
+    # If the LVI mitigation is enabled, use the customized compilation toolchain.
+    if (${LVI_MITIGATION_BINDIR} MATCHES None)
+      message(FATAL_ERROR "LVI_MITIGATION_BINDIR is not specified.")
+    endif ()
+    include(configure_lvi_mitigation_build)
+    configure_lvi_mitigation_build(BINDIR ${LVI_MITIGATION_BINDIR})
+  else ()
+    # For the normal build, if the CC environment variable has been specified or if
+    # the CMAKE_C_COMPILER cmake variable has been passed to cmake, use the C compiler
+    # that has been specified. Otherwise, prefer clang. Same for C++ compiler.
+    if (NOT DEFINED ENV{CC} AND NOT DEFINED CMAKE_C_COMPILER)
+      find_program(CMAKE_C_COMPILER clang-8 clang)
+    endif ()
+    if (NOT DEFINED ENV{CXX} AND NOT DEFINED CMAKE_CXX_COMPILER)
+      find_program(CMAKE_CXX_COMPILER clang++-8 clang++)
+    endif ()
   endif ()
-  include(configure_lvi_mitigation_build)
-  configure_lvi_mitigation_build(BINDIR ${LVI_MITIGATION_BINDIR})
 endif ()
 
 project(
@@ -158,6 +166,29 @@ else () # NOT OE_SGX
   endif ()
 endif ()
 
+if (OE_SGX)
+  # Currently we only support OpenSSL on SGX.
+  set(BUILD_OPENSSL ON)
+endif ()
+
+set(DEFAULT_TEST_ENCLAVE_CRYPTO_LIB
+    "mbedtls"
+    CACHE STRING "Default crypto library used by the enclaves.")
+string(TOLOWER "${DEFAULT_TEST_ENCLAVE_CRYPTO_LIB}"
+               DEFAULT_TEST_ENCLAVE_CRYPTO_LIB_LOWER)
+if ((NOT DEFAULT_TEST_ENCLAVE_CRYPTO_LIB_LOWER STREQUAL "mbedtls")
+    AND (NOT DEFAULT_TEST_ENCLAVE_CRYPTO_LIB_LOWER STREQUAL "openssl"))
+  message(
+    FATAL_ERROR "Unsupported crypto library: ${DEFAULT_ENCLAVE_CRYPTO_LIB}")
+endif ()
+if ((DEFAULT_TEST_ENCLAVE_CRYPTO_LIB_LOWER STREQUAL "openssl")
+    AND (NOT BUILD_OPENSSL))
+  message(
+    FATAL_ERROR
+      "Cannot set OpenSSL as the default crypto library when BUILD_OPENSSL is OFF"
+  )
+endif ()
+
 if (WIN32)
   # NOTE: On Windows we have found that we must use Git Bash, not the
   # Bash from the Windows Subsystem for Linux. Hence this is
@@ -171,6 +202,26 @@ if (WIN32)
   if (NOT OE_BASH)
     message(FATAL_ERROR "Git Bash not found!")
   endif ()
+
+  # Looking for Perl and Dos2unix if BUILD_OPENSSL is ON.
+  if (BUILD_OPENSSL)
+    # OpenSSL relies on Perl to generate files (e.g., headers, assembly files, and test cases).
+    find_program(OE_PERL perl PATHS "C:/Program Files/Git/bin"
+                                    "${GIT_DIR}/../usr/bin" NO_DEFAULT_PATH)
+    if (NOT OE_PERL)
+      message(FATAL_ERROR "Perl not found!")
+    endif ()
+
+    # Dos2unix utility is used to convert CRLF to LF, which is required by some
+    # OpenSSL tests.
+    find_program(
+      OE_DOS2UNIX dos2unix PATHS "C:/Program Files/Git/bin"
+                                 "${GIT_DIR}/../usr/bin" NO_DEFAULT_PATH)
+    if (NOT OE_DOS2UNIX)
+      message(FATAL_ERROR "Dos2unix not found!")
+    endif ()
+  endif ()
+
   if (NOT NUGET_PACKAGE_PATH)
     message(
       FATAL_ERROR
@@ -182,6 +233,16 @@ else ()
   if (NOT OE_BASH)
     message(FATAL_ERROR "Bash not found!")
   endif ()
+
+  # Looking for Perl if BUILD_OPENSSL is ON.
+  if (BUILD_OPENSSL)
+    # OpenSSL relies on Perl to generate files (e.g., headers, assembly files, and test cases).
+    find_program(OE_PERL perl)
+    if (NOT OE_PERL)
+      message(FATAL_ERROR "Perl not found!")
+    endif ()
+  endif ()
+
 endif ()
 
 # See `cmake/enclave_cmake_wrappers.cmake` for wrapper functions.
@@ -200,18 +261,12 @@ include(package_settings)
 # See `cmake/add_enclave.cmake` for enclave creation logic
 include(add_enclave)
 
-# User configurable options.
-option(
-  HAS_QUOTE_PROVIDER
-  "Take a build dependency on SGX DCAP, which requires FLC on target device to run."
-  ON)
-
 # TODO: See #756: Fix this because it is incompatible with
 # multi-configuration generators
 if (uppercase_CMAKE_BUILD_TYPE STREQUAL "DEBUG")
-  # In debug builds, debug_malloc is on by default
+  # In debug builds, enclaves are linked with liboedebugmalloc.a by default.
   option(USE_DEBUG_MALLOC
-         "Build oeenclave with memory leak detection capability." ON)
+         "Build enclaves with memory leak detection capability." ON)
 endif ()
 
 option(ADD_WINDOWS_ENCLAVE_TESTS "Build Windows enclave tests" OFF)
@@ -237,11 +292,6 @@ if (NOT USE_SNMALLOC)
   set(USE_DLMALLOC true)
 endif ()
 
-option(
-  COMPILE_SYSTEM_EDL
-  "Build system ecalls and ocalls into OE libraries. If not set, they must be included by application EDL to use."
-  OFF)
-
 option(BUILD_TESTS "Build OE tests" ON)
 
 # For EEID see https://github.com/openenclave/openenclave/pull/2647
@@ -250,9 +300,7 @@ option(
   "[EXPERIMENTAL] Include support for Extended Enclave Initialization Data."
   OFF)
 
-if (WITH_EEID AND WIN32)
-  message(FATAL_ERROR "WITH_EEID is not supported on Windows yet.")
-elseif (WITH_EEID AND OE_TRUSTZONE)
+if (WITH_EEID AND OE_TRUSTZONE)
   message(FATAL_ERROR "WITH_EEID is not supported on ARM yet.")
 endif ()
 
@@ -348,25 +396,19 @@ include(add_enclave_test)
 add_subdirectory(include)
 add_subdirectory(host)
 
-# Tests and samples have been ported to manually include system edl files.
-# They can no longer be used when system EDL is builtin.
-if (NOT COMPILE_SYSTEM_EDL)
-  if (BUILD_TESTS AND (NOT COMPONENT MATCHES OEHOSTVERIFY))
-    add_subdirectory(tests)
-  endif ()
-
-  # Skip samples when enabling the code coverage test.
-  # Otherwise, all the samples need to explicitly link against the libgcov library.
-  if (NOT CODE_COVERAGE)
-    add_subdirectory(samples)
-  endif ()
+if (BUILD_TESTS)
+  add_subdirectory(tests)
 endif ()
 
-if (NOT COMPONENT MATCHES OEHOSTVERFIY)
-  add_subdirectory(tools)
+# Skip samples when enabling the code coverage test.
+# Otherwise, all the samples need to explicitly link against the libgcov library.
+if (NOT CODE_COVERAGE)
+  add_subdirectory(samples)
 endif ()
 
-if (BUILD_ENCLAVES AND (NOT COMPONENT MATCHES OEHOSTVERIFY))
+add_subdirectory(tools)
+
+if (BUILD_ENCLAVES)
   add_subdirectory(enclave)
   add_subdirectory(3rdparty)
   add_subdirectory(libc)
@@ -374,7 +416,7 @@ if (BUILD_ENCLAVES AND (NOT COMPONENT MATCHES OEHOSTVERIFY))
   add_subdirectory(syscall)
 endif ()
 
-if (OE_SGX AND (NOT COMPONENT MATCHES OEHOSTVERIFY))
+if (OE_SGX)
   add_subdirectory(debugger)
 endif ()
 
@@ -388,12 +430,18 @@ if (WIN32)
           DESTINATION ${CMAKE_INSTALL_BINDIR}/scripts/)
   install(FILES ./scripts/install-windows-prereqs.ps1
           DESTINATION ${CMAKE_INSTALL_BINDIR}/scripts/)
-  install(FILES ./cmake/maybe_build_using_clangw.cmake
-          DESTINATION ${CMAKE_INSTALL_LIBDIR}/openenclave/cmake)
-  install(FILES ./cmake/add_dcap_client_target.cmake
-          DESTINATION ${CMAKE_INSTALL_LIBDIR}/openenclave/cmake)
-  install(FILES ./cmake/copy_oedebugrt_target.cmake
-          DESTINATION ${CMAKE_INSTALL_LIBDIR}/openenclave/cmake)
+  install(
+    FILES ./cmake/maybe_build_using_clangw.cmake
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/openenclave/cmake
+    COMPONENT OEHOSTVERIFY)
+  install(
+    FILES ./cmake/add_dcap_client_target.cmake
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/openenclave/cmake
+    COMPONENT OEHOSTVERIFY)
+  install(
+    FILES ./cmake/copy_oedebugrt_target.cmake
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/openenclave/cmake
+    COMPONENT OEHOSTVERIFY)
 endif ()
 
 # Install necessary files for LVI mitigation.

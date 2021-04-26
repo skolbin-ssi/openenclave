@@ -1,12 +1,14 @@
 // Copyright (c) Open Enclave SDK contributors.
 // Licensed under the MIT License.
 #include "quote.h"
+#include <openenclave/attestation/sgx/evidence.h>
 #include <openenclave/bits/sgx/sgxtypes.h>
 #include <openenclave/internal/crypto/cert.h>
 #include <openenclave/internal/crypto/ec.h>
 #include <openenclave/internal/crypto/sha.h>
 #include <openenclave/internal/datetime.h>
 #include <openenclave/internal/raise.h>
+#include <openenclave/internal/safecrt.h>
 #include <openenclave/internal/trace.h>
 #include <openenclave/internal/utils.h>
 #include "../common.h"
@@ -16,12 +18,24 @@
 
 #include <time.h>
 
+#ifdef OE_BUILD_ENCLAVE
+#include "../enclave/sgx/verifier.h"
+#include "platform_t.h"
+#else
+#include "../host/sgx/quote.h"
+#endif
+
 // Public key of Intel's root certificate.
 static const char* g_expected_root_certificate_key =
     "-----BEGIN PUBLIC KEY-----\n"
     "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEC6nEwMDIYZOj/iPWsCzaEKi71OiO\n"
     "SLRFhWGjbnBVJfVnkY4u3IjkDYYL0MxO4mqsyYjlBalTVYxFP2sJBK5zlA==\n"
     "-----END PUBLIC KEY-----\n";
+
+static const oe_uuid_t _ecdsa_uuid = {OE_FORMAT_UUID_SGX_ECDSA};
+
+// Max length of SGX DCAP QVL/QvE returned supplemental data
+#define MAX_SUPPLEMENTAL_DATA_SIZE 1000
 
 OE_INLINE uint16_t ReadUint16(const uint8_t* p)
 {
@@ -468,7 +482,12 @@ oe_result_t oe_verify_sgx_quote(
 
     // Endorsements verification
     OE_CHECK(oe_verify_quote_with_sgx_endorsements(
-        quote, quote_size, &sgx_endorsements, input_validation_time));
+        quote,
+        quote_size,
+        &sgx_endorsements,
+        input_validation_time,
+        NULL,
+        NULL));
 
     result = OE_OK;
 
@@ -483,27 +502,20 @@ oe_result_t oe_verify_quote_with_sgx_endorsements(
     const uint8_t* quote,
     size_t quote_size,
     const oe_sgx_endorsements_t* sgx_endorsements,
-    oe_datetime_t* input_validation_time)
+    oe_datetime_t* input_validation_time,
+    oe_datetime_t* valid_from,
+    oe_datetime_t* valid_until)
 {
     oe_result_t result = OE_UNEXPECTED;
     oe_datetime_t validity_from = {0};
     oe_datetime_t validity_until = {0};
     oe_datetime_t validation_time = {0};
 
-    OE_CHECK_MSG(
-        oe_verify_quote_internal(quote, quote_size),
-        "Failed to verify remote quote.",
-        NULL);
-
-    OE_CHECK_MSG(
-        oe_get_sgx_quote_validity(
-            quote,
-            quote_size,
-            sgx_endorsements,
-            &validity_from,
-            &validity_until),
-        "Failed to validate quote. %s",
-        oe_result_str(result));
+    uint32_t collateral_expiration_status;
+    uint32_t quote_verification_result;
+    uint8_t supplemental_data[MAX_SUPPLEMENTAL_DATA_SIZE] = {0};
+    uint32_t supplemental_data_size_out = 0;
+    time_t expiration_check_date;
 
     // Verify quote/endorsements for the given time.  Use endorsements
     // creation time if one was not provided.
@@ -529,6 +541,88 @@ oe_result_t oe_verify_quote_with_sgx_endorsements(
     }
 
     oe_datetime_log("Validation datetime: ", &validation_time);
+
+    // Convert validation time to time_t
+    OE_CHECK(oe_datetime_to_time_t(&validation_time, &expiration_check_date));
+
+    // Try to call SGX DCAP QVL/QvE to verify quote first
+    result = sgx_verify_quote(
+        &_ecdsa_uuid,
+        NULL,
+        0,
+        quote,
+        (uint32_t)quote_size,
+        expiration_check_date,
+        &collateral_expiration_status,
+        &quote_verification_result,
+        NULL,
+        0,
+        supplemental_data,
+        MAX_SUPPLEMENTAL_DATA_SIZE,
+        &supplemental_data_size_out,
+        *(uint32_t*)(sgx_endorsements->items[OE_SGX_ENDORSEMENT_FIELD_VERSION]
+                         .data),
+        (void*)(sgx_endorsements->items[OE_SGX_ENDORSEMENT_FIELD_TCB_INFO]
+                    .data),
+        sgx_endorsements->items[OE_SGX_ENDORSEMENT_FIELD_TCB_INFO].size,
+        (void*)(sgx_endorsements
+                    ->items[OE_SGX_ENDORSEMENT_FIELD_TCB_ISSUER_CHAIN]
+                    .data),
+        sgx_endorsements->items[OE_SGX_ENDORSEMENT_FIELD_TCB_ISSUER_CHAIN].size,
+        (void*)(sgx_endorsements->items[OE_SGX_ENDORSEMENT_FIELD_CRL_PCK_CERT]
+                    .data),
+        sgx_endorsements->items[OE_SGX_ENDORSEMENT_FIELD_CRL_PCK_CERT].size,
+        (void*)(sgx_endorsements
+                    ->items[OE_SGX_ENDORSEMENT_FIELD_CRL_PCK_PROC_CA]
+                    .data),
+        sgx_endorsements->items[OE_SGX_ENDORSEMENT_FIELD_CRL_PCK_PROC_CA].size,
+        (void*)(sgx_endorsements
+                    ->items[OE_SGX_ENDORSEMENT_FIELD_CRL_ISSUER_CHAIN_PCK_CERT]
+                    .data),
+        sgx_endorsements
+            ->items[OE_SGX_ENDORSEMENT_FIELD_CRL_ISSUER_CHAIN_PCK_CERT]
+            .size,
+        (void*)(sgx_endorsements->items[OE_SGX_ENDORSEMENT_FIELD_QE_ID_INFO]
+                    .data),
+        sgx_endorsements->items[OE_SGX_ENDORSEMENT_FIELD_QE_ID_INFO].size,
+        (void*)(sgx_endorsements
+                    ->items[OE_SGX_ENDORSEMENT_FIELD_QE_ID_ISSUER_CHAIN]
+                    .data),
+        sgx_endorsements->items[OE_SGX_ENDORSEMENT_FIELD_QE_ID_ISSUER_CHAIN]
+            .size);
+
+    if (result != OE_PLATFORM_ERROR)
+    {
+        if (result != OE_OK)
+        {
+            OE_RAISE_MSG(
+                result,
+                "SGX QVL/QvE based quote verification failed with error 0x%x",
+                result);
+        }
+
+        result = OE_OK;
+    }
+
+    // DCAP QVL doesn't exist or system env `SGX_DCAP_QVL` doesn't set
+    if (result == OE_PLATFORM_ERROR)
+    {
+        OE_CHECK_MSG(
+            oe_verify_quote_internal(quote, quote_size),
+            "Failed to verify remote quote.",
+            NULL);
+    }
+
+    OE_CHECK_MSG(
+        oe_get_sgx_quote_validity(
+            quote,
+            quote_size,
+            sgx_endorsements,
+            &validity_from,
+            &validity_until),
+        "Failed to validate quote. %s",
+        oe_result_str(result));
+
     if (oe_datetime_compare(&validation_time, &validity_from) < 0)
     {
         char vtime[OE_DATETIME_STRING_SIZE];
@@ -563,10 +657,15 @@ oe_result_t oe_verify_quote_with_sgx_endorsements(
             vtime,
             vuntil);
     }
-
+    if (valid_from && valid_until)
+    {
+        *valid_from = validity_from;
+        *valid_until = validity_until;
+    }
     result = OE_OK;
 
 done:
+
     return result;
 }
 
